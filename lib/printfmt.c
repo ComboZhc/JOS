@@ -7,6 +7,40 @@
 #include <inc/string.h>
 #include <inc/stdarg.h>
 #include <inc/error.h>
+  
+extern int color_mask;
+
+int getcolor(char type, int is_back)  
+{
+	switch (type) {
+		case 'R':
+		case 'r':
+			return 4;
+		case 'G':
+		case 'g':
+			return 2;
+		case 'B':
+		case 'b':
+			return 1;
+		case 'C':
+		case 'c':
+			return 3;
+		case 'M':
+		case 'm':
+			return 5;
+		case 'Y':
+		case 'y':
+			return 6;
+		case 'K':
+		case 'k':
+			return 0;
+		case 'W':
+		case 'w':
+			return 7;
+		default:
+			return is_back ? 0 : 7;
+	}
+}  
 
 /*
  * Space or zero padding and a field width are supported for the numeric
@@ -87,6 +121,7 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 	unsigned long long num;
 	int base, lflag, width, precision, altflag;
 	char padc;
+	color_mask = 0x0700;
 
 	while (1) {
 		while ((ch = *(unsigned char *) fmt++) != '%') {
@@ -160,6 +195,17 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 			putch(va_arg(ap, int), putdat);
 			break;
 
+		// front color
+		case '<':
+			color_mask &= 0xF0FF;
+			color_mask |= getcolor(*fmt++, 0) << 8;
+			break;
+		// background color
+		case '>':
+			color_mask &= 0x0FFF;
+			color_mask |= getcolor(*fmt++, 1) << 12;
+			break;
+
 		// error message
 		case 'e':
 			err = va_arg(ap, int);
@@ -205,11 +251,9 @@ vprintfmt(void (*putch)(int, void*), void *putdat, const char *fmt, va_list ap)
 
 		// (unsigned) octal
 		case 'o':
-			// Replace this with your code.
-			putch('X', putdat);
-			putch('X', putdat);
-			putch('X', putdat);
-			break;
+			num = getuint(&ap, lflag);
+			base = 8;
+			goto number;
 
 		// pointer
 		case 'p':
