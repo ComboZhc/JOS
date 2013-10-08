@@ -5,11 +5,12 @@
 #include <inc/stdio.h>
 #include <inc/stdarg.h>
 
+int color_mask = 0x0700;
 
 static void
 putch(int ch, int *cnt)
 {
-	cputchar(ch);
+	cputchar(color_mask | ch);
 	*cnt++;
 }
 
