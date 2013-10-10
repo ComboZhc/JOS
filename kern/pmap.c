@@ -174,7 +174,7 @@ mem_init(void)
 	boot_map_region(kern_pgdir, 
 		UPAGES, 
 		ROUNDUP(npages * sizeof(struct PageInfo), PGSIZE), 
-		pages, 
+		PADDR(pages), 
 		PTE_U | PTE_P);
 
 	//////////////////////////////////////////////////////////////////////
@@ -414,8 +414,7 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 		pgtable = pgdir_walk(pgdir, (const void*)va, true);
 		if (pgtable == NULL)
 			panic("boot_map_region(): out of memory");
-		*pgtable = PGNUM(pa) | perm | PTE_P;
-		pgtable++;
+		*pgtable = pa | perm | PTE_P;
 		va += PGSIZE;
 		pa += PGSIZE;
 	}
