@@ -375,6 +375,8 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
 	pgdir = &pgdir[PDX(va)];
 	struct PageInfo* info;
+	if (*pgdir & PTE_PS)
+		return pgdir;
 	if (*pgdir & PTE_P) {
 		// The page frame address specifies the physical starting address of a page.
 		return (pte_t*)KADDR(PTE_ADDR(*pgdir)) + PTX(va);
@@ -410,13 +412,14 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 	// Fill this function in
 	pte_t *pgtable;
 	size_t i, c = PGNUM(size);
-	for (i = 0; i < c; i++) {
-		pgtable = pgdir_walk(pgdir, (const void*)va, true);
+	size_t step = (perm & PTE_PS) ? NPDENTRIES : 1;
+	for (i = 0; i < c; i+= step) {
+		pgtable = (perm & PTE_PS) ? &pgdir[PDX(va)] : pgdir_walk(pgdir, (const void*)va, true);
 		if (pgtable == NULL)
 			panic("boot_map_region(): out of memory");
 		*pgtable = pa | perm | PTE_P;
-		va += PGSIZE;
-		pa += PGSIZE;
+		va += PGSIZE * step;
+		pa += PGSIZE * step;
 	}
 }
 
@@ -692,9 +695,8 @@ check_kern_pgdir(void)
 	for (i = 0; i < n; i += PGSIZE)
 		assert(check_va2pa(pgdir, UPAGES + i) == PADDR(pages) + i);
 
-
 	// check phys mem
-	for (i = 0; i < npages * PGSIZE; i += PGSIZE)
+	for (i = 0; i < npages * PGSIZE; i += PGSIZE * NPDENTRIES)
 		assert(check_va2pa(pgdir, KERNBASE + i) == i);
 
 	// check kernel stack
@@ -735,6 +737,8 @@ check_va2pa(pde_t *pgdir, uintptr_t va)
 	pgdir = &pgdir[PDX(va)];
 	if (!(*pgdir & PTE_P))
 		return ~0;
+	if (*pgdir & PTE_PS)
+		return PTE_ADDR(*pgdir);
 	p = (pte_t*) KADDR(PTE_ADDR(*pgdir));
 	if (!(p[PTX(va)] & PTE_P))
 		return ~0;
