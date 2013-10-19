@@ -147,7 +147,7 @@ mon_xp(int argc, char **argv, struct Trapframe *tf)
 	size_t i;
 	start = strtol(argv[1], NULL, 0);
 	length = strtol(argv[2], NULL, 0);
-	for (i = 0; i < length; i+=4, start+=4) {
+	for (i = 0; i < length; i+=4, start+=16) {
 		cprintf("[%08x]: 0x%08x 0x%08x 0x%08x 0x%08x\n", 
 			start, 
 			*((uint32_t*)KADDR(start)),
@@ -167,7 +167,7 @@ mon_xv(int argc, char **argv, struct Trapframe *tf)
 	size_t i;
 	start = strtol(argv[1], NULL, 0);
 	length = strtol(argv[2], NULL, 0);
-	for (i = 0; i < length; i+=4, start+=4) {
+	for (i = 0; i < length; i+=4, start+=16) {
 		cprintf("[%08x]: 0x%08x 0x%08x 0x%08x 0x%08x\n", 
 			start, 
 			*((uint32_t*)(start)),

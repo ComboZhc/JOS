@@ -119,7 +119,7 @@ boot_alloc(uint32_t n)
 void
 mem_init(void)
 {
-	uint32_t cr0;
+	uint32_t cr0, cr4;
 	size_t n;
 
 	// Find out how much memory the machine has (npages & npages_basemem).
@@ -176,6 +176,12 @@ mem_init(void)
 		ROUNDUP(npages * sizeof(struct PageInfo), PGSIZE), 
 		PADDR(pages), 
 		PTE_U | PTE_P);
+	boot_map_region(kern_pgdir,
+		(uintptr_t)pages,
+		ROUNDUP(npages * sizeof(struct PageInfo), PGSIZE),
+		PADDR(pages),
+		PTE_W | PTE_P
+		);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -204,12 +210,16 @@ mem_init(void)
 	// Your code goes here:
 	boot_map_region(kern_pgdir,
 		KERNBASE,
-		1 << 28,
+		~KERNBASE,
 		0,
-		PTE_W | PTE_P);
+		PTE_W | PTE_P | PTE_PS);
 
 	// Check that the initial page directory has been set up correctly.
 	check_kern_pgdir();
+
+	cr4 = rcr4();
+	cr4 |= CR4_PSE;
+	lcr4(cr4);
 
 	// Switch from the minimal entry page directory to the full kern_pgdir
 	// page table we just created.	Our instruction pointer should be
@@ -228,6 +238,7 @@ mem_init(void)
 	cr0 |= CR0_PE|CR0_PG|CR0_AM|CR0_WP|CR0_NE|CR0_MP;
 	cr0 &= ~(CR0_TS|CR0_EM);
 	lcr0(cr0);
+
 
 	// Some more checks, only possible after kern_pgdir is installed.
 	check_page_installed_pgdir();
@@ -456,10 +467,9 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 	if (pgtable == NULL)
 		return -E_NO_MEM;
 	if (*pgtable & PTE_P) {
-		if (PTE_ADDR(*pgtable) == page2pa(pp)) {
+		if (PTE_ADDR(*pgtable) == page2pa(pp))
 			pp->pp_ref--;
-			tlb_invalidate(pgdir, va);
-		} else 
+		else
 			page_remove(pgdir, va);
 	}
 	pp->pp_ref++;
