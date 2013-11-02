@@ -212,7 +212,7 @@ mem_init(void)
 		KERNBASE,
 		~KERNBASE,
 		0,
-		PTE_W | PTE_P | PTE_PS);
+		PTE_W | PTE_P);
 
 	// Check that the initial page directory has been set up correctly.
 	check_kern_pgdir();
