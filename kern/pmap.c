@@ -200,7 +200,7 @@ mem_init(void)
 		UENVS,
 		ROUNDUP(NENV * sizeof(struct Env), PGSIZE),
 		PADDR(envs),
-		PTE_W | PTE_P
+		PTE_U | PTE_P
 		);
 
 	//////////////////////////////////////////////////////////////////////
@@ -586,6 +586,20 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
+	pte_t* pte;
+	uint32_t beg = (uint32_t)va;
+	uint32_t end = (uint32_t)va + len;
+	uint32_t i = 0;
+	beg = ROUNDDOWN(beg, PGSIZE);
+	end = ROUNDUP(end, PGSIZE);
+	// Be careful about user_mem_check_addr!
+	for (i = 0; beg < end; beg += PGSIZE, i++) {
+		pte = pgdir_walk(env->env_pgdir, (void*)beg, 0);
+		if (beg >= ULIM || pte == NULL || ((*pte & perm) != perm)) {
+			user_mem_check_addr = i ? (uintptr_t)beg : (uintptr_t)va;
+			return -E_FAULT;
+		}
+	}
 
 	return 0;
 }

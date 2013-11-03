@@ -1,0 +1,245 @@
+\documentclass[11pt]{article}
+\usepackage[top=1in, bottom=1in, left=1.25in, right=1.25in]{geometry}
+\usepackage[BoldFont,SlantFont,CJKsetspaces,CJKchecksingle]{xeCJK}
+\usepackage{framed}
+\usepackage{amsmath}
+\usepackage{listings}
+\setCJKmainfont[BoldFont=SimHei]{SimSun}
+\setCJKmonofont{SimSun}
+\usepackage{graphicx}
+\usepackage{color}
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+\lstset{ %
+  backgroundcolor=\color{white},
+  basicstyle=\ttfamily,
+  breakatwhitespace=false,
+  breaklines=true,
+  captionpos=t,
+  commentstyle=\color{mygreen},
+  columns=flexible,
+  deletekeywords={...},
+  escapeinside={\%*}{*)},
+  extendedchars=true,
+  frame=single,
+  keepspaces=true,
+  keywordstyle=\color{blue},
+  language=C,
+  morekeywords={*,...},
+  numbers=none,
+  rulecolor=\color{black},
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  stepnumber=1,
+  stringstyle=\color{mymauve},
+  tabsize=2,
+  title=\lstname
+}
+\newenvironment{packed_enum}{
+\begin{enumerate}
+  \setlength{\itemsep}{1pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{enumerate}}
+\parindent 2em
+
+\begin{document}
+\title{\textbf{\huge{实验报告 Lab3}}\\
+10300240039 章超}
+\maketitle
+\section{User Environments and Exception Handling}
+\subsection{Allocating the Environments Array}
+\begin{framed}
+\noindent\textbf{Exercise 1}Modify \lstinline|mem_init()| in \lstinline|kern/pmap.c| to allocate and map the envs array. This array consists of exactly NENV instances of the Env structure allocated much like how you allocated the pages array. Also like the pages array, the memory backing envs should also be mapped user read-only at UENVS (defined in \lstinline|inc/memlayout.h|) so user processes can read from this array.
+
+You should run your code and make sure \lstinline|check_kern_pgdir()| succeeds. 
+\end{framed}
+
+\subsection{Creating and Running Environments}
+\begin{framed}
+\noindent\textbf{Exercise 2}In the file \lstinline|env.c|, finish coding the following functions:
+
+
+\noindent\lstinline|env_init()|
+
+    Initialize all of the Env structures in the envs array and add them to the \lstinline|env_free_list|. Also calls \lstinline|env_init_percpu|, which configures the segmentation hardware with separate segments for privilege level 0 (kernel) and privilege level 3 (user).
+
+\noindent\lstinline|env_setup_vm()|
+
+    Allocate a page directory for a new environment and initialize the kernel portion of the new environment's address space.
+
+\noindent\lstinline|region_alloc()|
+
+    Allocates and maps physical memory for an environment
+
+\noindent\lstinline|load_icode()|
+
+    You will need to parse an ELF binary image, much like the boot loader already does, and load its contents into the user address space of a new environment.
+
+\noindent\lstinline|env_create()|
+
+    Allocate an environment with \lstinline|env_alloc| and call \lstinline|load_icode| load an ELF binary into it.
+    
+\noindent\lstinline|env_run()|
+
+    Start a given environment running in user mode.
+
+As you write these functions, you might find the new cprintf verb \lstinline|%e| useful -- it prints a description corresponding to an error code. For example,
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+	r = -E_NO_MEM;
+	panic("env_alloc: %e", r);
+\end{lstlisting}
+
+will panic with the message "env\_alloc: out of memory". 
+\end{framed}
+
+\subsection{Handling Interrupts and Exceptions}
+\begin{framed}
+\noindent\textbf{Exercise 3}Read Chapter 9, Exceptions and Interrupts in the 80386 Programmer's Manual (or Chapter 5 of the IA-32 Developer's Manual), if you haven't already. 
+\end{framed}
+
+\subsection{Setting Up the IDT}
+\begin{framed}
+\noindent\textbf{Exercise 4} Edit \lstinline|trapentry.S| and \lstinline|trap.c| and implement the features described above. The macros \lstinline|TRAPHANDLER| and \lstinline|TRAPHANDLER_NOEC| in \lstinline|trapentry.S| should help you, as well as the \lstinline|T_*| defines in \lstinline|inc/trap.h|. You will need to add an entry point in \lstinline|trapentry.S| (using those macros) for each trap defined in \lstinline|inc/trap.h|, and you'll have to provide \lstinline|_alltraps| which the \lstinline|TRAPHANDLER| macros refer to. You will also need to modify \lstinline|idt_init()| to initialize the idt to point to each of these entry points defined in \lstinline|trapentry.S|; the \lstinline|SETGATE| macro will be helpful here.
+
+Your \lstinline|_alltraps| should:
+\\
+1. push values to make the stack look like a struct \lstinline|Trapframe| \\
+2. load \lstinline|GD_KD| into \lstinline|%d| and \lstinline|%es| \\
+3. pushl \lstinline|%esp| to pass a pointer to the Trapframe as an argument to \lstinline|trap()| \\
+4. call trap (can trap ever return?) \\
+
+Consider using the pushal instruction; it fits nicely with the layout of the struct Trapframe.
+
+Test your trap handling code using some of the test programs in the user directory that cause exceptions before making any system calls, such as user/divzero. You should be able to get make grade to succeed on the divzero, softint, and badsegment tests at this point. 
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question}
+
+1. What is the purpose of having an individual handler function for each exception/interrupt? (i.e., if all exceptions/interrupts were delivered to the same handler, what feature that exists in the current implementation could not be provided?)
+
+2. Did you have to do anything to make the user/softint program behave correctly? The grade script expects it to produce a general protection fault (trap 13), but softint's code says \lstinline|int $14|. Why should this produce interrupt vector 13? What happens if the kernel actually allows softint's \lstinline|int $14| instruction to invoke the kernel's page fault handler (which is interrupt vector 14)?
+\end{framed}
+
+\section{Page Faults, Breakpoints Exceptions, and System Calls}
+\subsection{Handling Page Faults}
+\begin{framed}
+\noindent\textbf{Exercise 5} Modify \lstinline|trap_dispatch()| to dispatch page fault exceptions to \lstinline|page_fault_handler()|. You should now be able to get make grade to succeed on the \lstinline|faultread|, \lstinline|faultreadkernel|, \lstinline|faultwrite|, and \lstinline|faultwritekernel| tests. If any of them don't work, figure out why and fix them. Remember that you can boot JOS into a particular user program using \lstinline|make run-x| or make \lstinline|run-x-nox|.
+\end{framed}
+
+\subsection{The Breakpoint Exception}
+\begin{framed}
+\noindent\textbf{Exercise 6} Modify \lstinline|trap_dispatch()| to make breakpoint exceptions invoke the kernel monitor. You should now be able to get make grade to succeed on the breakpoint test. 
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question}
+
+3. The break point test case will either generate a break point exception or a general protection fault depending on how you initialized the break point entry in the IDT (i.e., your call to \lstinline|SETGATE| from \lstinline|idt_init|). Why? How did you need to set it in order to get the breakpoint exception to work as specified above?
+
+4. What do you think is the point of these mechanisms, particularly in light of what the user/softint test program does?
+\end{framed}
+
+\subsection{System calls}
+\begin{framed}
+\noindent\textbf{Exercise 7} Add a handler in the kernel for interrupt vector \lstinline|T_SYSCALL|. You will have to edit \lstinline|kern/trapentry.S| and \lstinline|kern/trap.c|'s \lstinline|idt_init()|. You also need to change \lstinline|trap_dispatch()| to handle the system call interrupt by calling \lstinline|syscall()| (defined in \lstinline|kern/syscall.c|) with the appropriate arguments, and then arranging for the return value to be passed back to the user process in \lstinline|%eax|. Finally, you need to implement \lstinline|syscall()| in \lstinline|kern/syscall.c|. Make sure \lstinline|syscall()| returns \lstinline|-E_INVAL| if the system call number is invalid. You should read and understand \lstinline|lib/syscall.c| (especially the inline assembly routine) in order to confirm your understanding of the system call interface. You may also find it helpful to read \lstinline|inc/syscall.h|.
+
+Run the \lstinline|user/hello| program under your kernel (\lstinline|make run-hello|). It should print "hello, world" on the console and then cause a page fault in user mode. If this does not happen, it probably means your system call handler isn't quite right. You should also now be able to get make grade to succeed on the testbss test.
+
+\end{framed}
+注意有两个\lstinline|sys_call|
+
+\subsection{User-mode startup}
+\begin{framed}
+\noindent\textbf{Exercise 8} dd the required code to the user library, then boot your kernel. You should see user/hello print "hello, world" and then print "i am environment 00000800". user/hello then attempts to "exit" by calling \lstinline|sys_env_destroy()| (see \lstinline|lib/libmain.c| and \lstinline|lib/exit.c|). Since the kernel currently only supports one user environment, it should report that it has destroyed the only environment and then drop into the kernel monitor. You should be able to get \lstinline|make grade| to succeed on the hello test. 
+\end{framed}
+
+\subsection{Page faults and memory protection}
+\begin{framed}
+\noindent\textbf{Exercise 9} Change \lstinline|kern/trap.c| to panic if a page fault happens in kernel mode.
+
+Hint: to determine whether a fault happened in user mode or in kernel mode, check the low bits of the \lstinline|tf_cs|.
+
+Read \lstinline|user_mem_assert| in \lstinline|kern/pmap.c| and implement \lstinline|user_mem_check| in that same file.
+
+Change kern/syscall.c to sanity check arguments to system calls.
+
+Boot your kernel, running \lstinline|user/buggyhello|. The environment should be destroyed, and the kernel should not panic. You should see:
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+  [00001000] user_mem_check assertion failure for va 00000001
+  [00001000] free env 00001000
+  Destroyed the only environment - nothing more to do!
+\end{lstlisting}
+
+Finally, change \lstinline|debuginfo_eip| in \lstinline|kern/kdebug.c| to call \lstinline|user_mem_check| on \lstinline|usd|, \lstinline|stabs|, and \lstinline|stabstr|. If you now run user/breakpoint, you should be able to run \lstinline|backtrace| from the kernel monitor and see the backtrace traverse into \lstinline|lib/libmain.c| before the kernel panics with a page fault. What causes this page fault? You don't need to fix it, but you should understand why it happens.
+
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Exercise 10}
+  Boot your kernel, running \lstinline|user/evilhello|. The environment should be destroyed, and the kernel should not panic. You should see:
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+  [00000000] new env 00001000
+  [00001000] user_mem_check assertion failure for va f0100020
+  [00001000] free env 00001000
+\end{lstlisting}
+  
+\end{framed}
+
+\section{Challenges}
+\subsection{Challenge 1}
+\begin{framed}
+You probably have a lot of very similar code right now, between the lists of \lstinline|TRAPHANDLER| in \lstinline|trapentry.S| and their installations in \lstinline|trap.c|. Clean this up. Change the macros in \lstinline|trapentry.S| to automatically generate a table for \lstinline|trap.c| to use. Note that you can switch between laying down code and data in the assembler by using the directives \lstinline|.text| and \lstinline|.data|. 
+\end{framed}
+\subsection{Challenge 2}
+\begin{framed}
+Modify the JOS kernel monitor so that you can 'continue' execution from the current location (e.g., after the int3, if the kernel monitor was invoked via the breakpoint exception), and so that you can single-step one instruction at a time. You will need to understand certain bits of the \lstinline|EFLAGS| register in order to implement single-stepping.
+
+Optional: If you're feeling really adventurous, find some x86 disassembler source code - e.g., by ripping it out of QEMU, or out of GNU binutils, or just write it yourself - and extend the JOS kernel monitor to be able to disassemble and display instructions as you are stepping through them. Combined with the symbol table loading from lab 2, this is the stuff of which real kernel debuggers are made. 
+\end{framed}
+
+\subsection{Challenge 3}
+\begin{framed}
+Implement system calls using the sysenter and sysexit instructions instead of using \lstinline|int 0x30| and \lstinline|iret|.
+
+The \lstinline|sysenter/sysexit| instructions were designed by Intel to be faster than \lstinline|int/iret|. They do this by using registers instead of the stack and by making assumptions about how the segmentation registers are used. The exact details of these instructions can be found in Volume 2B of the Intel reference manuals.
+
+The easiest way to add support for these instructions in JOS is to add a \lstinline|sysenter_handler| in \lstinline|kern/trapentry.S| that saves enough information about the user environment to return to it, sets up the kernel environment, pushes the arguments to \lstinline|syscall()| and calls \lstinline|syscall()| directly. \lstinline|Once syscall()| returns, set everything up for and execute the sysexit instruction. You will also need to add code to \lstinline|kern/init.c| to set up the necessary model specific registers (MSRs). Section 6.1.2 in Volume 2 of the AMD Architecture Programmer's Manual and the reference on SYSENTER in Volume 2B of the Intel reference manuals give good descriptions of the relevant MSRs. You can find an implementation of wrmsr to add to \lstinline|inc/x86.h| for writing to these MSRs here.
+
+Finally, \lstinline|lib/syscall.c| must be changed to support making a system call with \lstinline|sysenter|. Here is a possible register layout for the sysenter instruction:
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+  eax                - syscall number
+  edx, ecx, ebx, edi - arg1, arg2, arg3, arg4
+  esi                - return pc
+  ebp                - return esp
+  esp                - trashed by sysenter
+\end{lstlisting}
+  
+GCC's inline assembler will automatically save registers that you tell it to load values directly into. Don't forget to either save (push) and restore (pop) other registers that you clobber, or tell the inline assembler that you're clobbering them. The inline assembler doesn't support saving \lstinline|%ebp|, so you will need to add code to save and restore it yourself. The return address can be put into \lstinline|%esi| by using an instruction like \lstinline|leal after_sysenter_label, %%esi|.
+
+Note that this only supports 4 arguments, so you will need to leave the old method of doing system calls around to support 5 argument system calls. Furthermore, because this fast path doesn't update the current environment's trap frame, it won't be suitable for some of the system calls we add in later labs.
+
+You may have to revisit your code once we enable asynchronous interrupts in the next lab. Specifically, you'll need to enable interrupts when returning to the user process, which sysexit doesn't do for you. 
+\end{framed}
+
+\section{Tips}
+\begin{packed_enum}
+\item 汇编里面的操作数长度一定要看清！
+\item 调试时用类似\lstinline|warn("%d", i)|的语句来测试断点或者输出相关值！
+\item 碰到Triple Fault一定要耐心调试！
+\end{packed_enum}
+
+\section{References}
+北京大学操作系统实习(实验班)报告, 黄睿哲.
+
+操作系统JOS实习第二次报告, 张弛
+
+
+\end{document}
