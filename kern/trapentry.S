@@ -41,15 +41,53 @@
 	pushl $(num);							\
 	jmp _alltraps
 
+.data
+	.globl trap_handlers
+	.align 2
+	trap_handlers:
+
 .text
 
 /*
  * Lab 3: Your code here for generating entry points for the different traps.
  */
-
-
+/*
+ * http://pdos.csail.mit.edu/6.828/2010/readings/i386/s09_10.htm
+ */
+TRAPHANDLER_NOEC(trhdlr0, T_DIVIDE)
+TRAPHANDLER_NOEC(trhdlr1, T_DEBUG)
+TRAPHANDLER_NOEC(trhdlr2, T_NMI)
+TRAPHANDLER_NOEC(trhdlr3, T_BRKPT)
+TRAPHANDLER_NOEC(trhdlr4, T_OFLOW)
+TRAPHANDLER_NOEC(trhdlr5, T_BOUND)
+TRAPHANDLER_NOEC(trhdlr6, T_ILLOP)
+TRAPHANDLER_NOEC(trhdlr7, T_DEVICE)
+TRAPHANDLER(trhdlr8, T_DBLFLT)
+TRAPHANDLER_NOEC(trhdlr9, -1)
+TRAPHANDLER(trhdlr10, T_TSS)
+TRAPHANDLER(trhdlr11, T_SEGNP)
+TRAPHANDLER(trhdlr12, T_STACK)
+TRAPHANDLER(trhdlr13, T_GPFLT)
+TRAPHANDLER(trhdlr14, T_PGFLT)
+TRAPHANDLER(trhdlr15, -1)
+TRAPHANDLER_NOEC(trhdlr16, T_FPERR)
+TRAPHANDLER(trhdlr17, T_ALIGN)
+TRAPHANDLER_NOEC(trhdlr18, T_MCHK)
+TRAPHANDLER_NOEC(trhdlr19, T_SIMDERR)
 
 /*
  * Lab 3: Your code here for _alltraps
  */
+_alltraps:
+	pushw $0x0
+	pushw %ds
+	pushw $0x0
+	pushw %es
+	pushal
 
+	movw GD_KD, %ax
+	movw %ax, %ds
+	movw %ax, %es
+
+	pushl %esp
+	call trap
