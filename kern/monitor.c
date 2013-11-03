@@ -12,6 +12,7 @@
 #include <kern/kdebug.h>
 #include <kern/trap.h>
 #include <kern/pmap.h>
+#include <kern/env.h>
 
 #define CMDBUF_SIZE	80	// enough for one VGA text line
 
@@ -31,6 +32,8 @@ static struct Command commands[] = {
 	{ "set", "Set mapping", mon_set },
 	{ "xp", "Dump physical memory", mon_xp },
 	{ "xv", "Dump virtual memory", mon_xv },
+	{ "c", "Continue process", mon_c },
+	{ "si", "Step", mon_si },
 };
 #define NCOMMANDS (sizeof(commands)/sizeof(commands[0]))
 
@@ -180,6 +183,30 @@ mon_xv(int argc, char **argv, struct Trapframe *tf)
 	return 0;
 }
 
+int mon_c(int argc, char **argv, struct Trapframe *tf) {
+	extern struct Env* curenv;
+	if (tf == NULL || (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG)) {
+		cprintf("Invalid Trapframe\n");
+		return -1;
+	}
+	tf->tf_eflags &= ~FL_TF;
+	env_run(curenv);
+	return 0;
+}
+
+int mon_si(int argc, char **argv, struct Trapframe *tf) {
+	extern struct Env* curenv;
+	struct Eipdebuginfo info;
+	if (tf == NULL || (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG)) {
+		cprintf("Invalid Trapframe\n");
+		return -1;
+	}
+	debuginfo_eip(tf->tf_eip, &info);
+	cprintf("0x%08x %s:%d: %.*s+%d\n", tf->tf_eip, info.eip_file, info.eip_line, info.eip_fn_namelen, info.eip_fn_name, tf->tf_eip-info.eip_fn_addr);
+	tf->tf_eflags |= FL_TF;
+	env_run(curenv);
+	return 0;
+}
 
 
 /***** Kernel monitor command interpreter *****/
