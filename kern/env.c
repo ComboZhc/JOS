@@ -194,7 +194,7 @@ env_setup_vm(struct Env *e)
 
 	// LAB 3: Your code here.
 	e->env_pgdir = page2kva(p);
-	memcpy(e->env_pgdir, kern_pgdir, PGSIZE);
+	memmove(e->env_pgdir, kern_pgdir, PGSIZE);
 	memset(e->env_pgdir, 0, PDX(UTOP) * sizeof(pde_t));
 	p->pp_ref++;
 
@@ -364,7 +364,7 @@ load_icode(struct Env *e, uint8_t *binary, size_t size)
 			if (ph->p_filesz > ph->p_memsz)
 				panic("load_icode: File size is larger than memory size");
 			region_alloc(e, (void*)ph->p_va, ph->p_memsz);
-			memcpy((void*)ph->p_va, binary + ph->p_offset, ph->p_filesz);
+			memmove((void*)ph->p_va, binary + ph->p_offset, ph->p_filesz);
 			memset((void*)ph->p_va + ph->p_filesz, 0, ph->p_memsz - ph->p_filesz);
 		}
 
