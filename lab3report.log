@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.1415926-2.2-0.9995.2 (TeX Live 2009/Debian) (format=xelatex 2013.9.16)  4 NOV 2013 22:32
+This is XeTeX, Version 3.1415926-2.2-0.9995.2 (TeX Live 2009/Debian) (format=xelatex 2013.9.16)  16 NOV 2013 09:52
 entering extended mode
  %&-line parsing enabled.
 **/home/c/lab/lab3report.tex
@@ -635,26 +635,31 @@ Overfull \hbox (1.59827pt too wide) in paragraph at lines 754--755
  [] 
  []
 
-[18] [19] [20] [21]
+[18]
+Overfull \hbox (9.87102pt too wide) in paragraph at lines 769--770
+[]\rm/m/n/10.95 在[][][][][][][][][][][][][][][][][][][][]中，| 情 况 也 
+类 似，| 与[]$[][][][] [] [] [] [][][][] [] [][][][][] [] [][][] []
+ []
+
+[19] [20] [21] [22]
 File: lab3.c.png Graphic file (type QTm)
  <use  "lab3.c.png" >
-Overfull \hbox (1.59827pt too wide) in paragraph at lines 936--937
+Overfull \hbox (1.59827pt too wide) in paragraph at lines 950--951
  [] 
  []
 
-[22]
 File: lab3.si.png Graphic file (type QTm)
- <use  "lab3.si.png" >
-Overfull \hbox (1.59827pt too wide) in paragraph at lines 940--941
+<use  "lab3.si.png" >
+Overfull \hbox (1.59827pt too wide) in paragraph at lines 954--955
  [] 
  []
 
 [23] [24] (./lab3report.aux) ) 
 Here is how much of TeX's memory you used:
- 9088 strings out of 495713
- 144246 string characters out of 1188883
+ 9110 strings out of 495713
+ 144478 string characters out of 1188883
  391159 words of memory out of 3000000
- 12069 multiletter control sequences out of 15000+50000
+ 12091 multiletter control sequences out of 15000+50000
  8964 words of font info for 52 fonts, out of 3000000 for 9000
  28 hyphenation exceptions out of 8191
  38i,6n,72p,971b,1703s stack positions out of 5000i,500n,10000p,200000b,50000s

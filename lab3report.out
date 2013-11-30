@@ -18,8 +18,9 @@
 \BOOKMARK [2][-]{subsection.2.3}{System calls}{section.2}
 \BOOKMARK [2][-]{subsection.2.4}{User-mode startup}{section.2}
 \BOOKMARK [2][-]{subsection.2.5}{Page faults and memory protection}{section.2}
-\BOOKMARK [1][-]{section.3}{Challenges}{}
-\BOOKMARK [2][-]{subsection.3.1}{Challenge 1}{section.3}
-\BOOKMARK [2][-]{subsection.3.2}{Challenge 2}{section.3}
-\BOOKMARK [1][-]{section.4}{Tips}{}
-\BOOKMARK [1][-]{section.5}{References}{}
+\BOOKMARK [1][-]{section.3}{Question}{}
+\BOOKMARK [1][-]{section.4}{Challenges}{}
+\BOOKMARK [2][-]{subsection.4.1}{Challenge 1}{section.4}
+\BOOKMARK [2][-]{subsection.4.2}{Challenge 2}{section.4}
+\BOOKMARK [1][-]{section.5}{Tips}{}
+\BOOKMARK [1][-]{section.6}{References}{}

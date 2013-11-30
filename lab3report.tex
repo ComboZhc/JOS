@@ -754,6 +754,20 @@ debuginfo_eip(uintptr_t addr, struct Eipdebuginfo *info) {
 \includegraphics[scale=0.4]{lab3.grade.png}
 \end{center}
 
+\section{Question}
+\begin{framed}
+在\lstinline|user/hello.c|程序中调用了\lstinline|INT 0x30|，这是系统调用;\lstinline|user/divzero.c|触发了除零中断。请参考网页\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/INT.htm}中的内容，写出这两个\lstinline|INT|指令所做的具体工作，写出流程即可。
+\end{framed}
+
+首先，我们是在保护模式下的。所以先进入\lstinline|PROTECTED_MODE|。
+在\lstinline|PROTECTED_MODE|中，我们会进行合法性检查，比如检查中断向量必须在IDT里面，AR Byte(\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_05.htm})，也就是IDT Descriptor的12-8位是否合法。如果合法性不符和，则会触发General Protection异常(再次触发)。如果用户越权了（这是在\lstinline|user/hello.c|中的情况，也就是调用了软件中断），那么也会触发General Protection异常。如果对应的IDT项不存在，那么触发Not Present异常。合法性检查完成之后，我们来到\lstinline|TRAP-GATE-OR-INTERRUPT-GATE|。
+
+在\lstinline|TRAP-GATE-OR-INTERRUPT-GATE|中，我们也会进行合法性检查，比如Selector不能为空，必须在IDT Descriptor范围里面，AR Byte一定是Trap Gate或者Interrupt Gate，否则触发General Protection异常。然后我们检查CS是否是Non-conforming(允许从低权限到高权限），并且DPL是否小于CPL，如果条件满足，那么就跳到\lstinline|INTERRUPT-TO-INNER-PRIVILEGE|，我推测这是除零中断的情况，因为在用户态(CPL=3)执行了除法后，\lstinline|trap.c|中还是设置了DPL=0。如果条件不满足，我们跳到\lstinline|INTERRUPT-TO-SAME-PRIVILEGE-LEVEL|。
+
+在\lstinline|INTERRUPT-TO-INNER-PRIVILEGE|中，我们也还是先进行合法性检查，对于TSS的段结构，如果Selector为空，触发General Protection异常；如果Selector的索引超过了范围，触发Invalid TSS异常；如果Selector的RPL(Request Privilege Level)不等于CS的DPL，触发Invalid TSS异常；如果SS的DPL也不等于CS的DPL，触发Invalid TSS异常；如果DS不可写，也触发Invalid TSS异常；如果SS不存在，则触发Stack segment异常。后面就和\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_06.htm}说的一样了。SS, ESP, CS, EIP都被设为新的值，旧的值都压入TSS指向的栈。并且设置新的CPL，CS的RPL，清空TF，NT，设置IF等等。
+
+在\lstinline|INTERRUPT-TO-SAME-PRIVILEGE-LEVEL|中，情况也类似，与\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_06.htm}大同小异。我们先进行一点合法性检查，比如有Error code时，要检查栈是否还能多压入两位，不然触发Stack segment异常；如果EIP不在CS里面，触发General Protection异常。这时候我们不需要设置新的SS和ESP了，只要更新CS, EIP, 将旧值压入栈，设置新的CPL，CS的RPL，清空TF，NT，设置IF就好了。
+
 \section{Challenges}
 \subsection{Challenge 1}
 \begin{framed}
