@@ -29,19 +29,24 @@ sched_yield(void)
 	// below to halt the cpu.
 
 	// LAB 4: Your code here.
-	warn("miao cpu:%d env:%d", thiscpu->cpu_id, thiscpu->cpu_env);
 	int i, cur_id;
+	struct Env* idle_env;
 	cur_id = thiscpu->cpu_env ? ENVX(thiscpu->cpu_env->env_id) : 0;
 	for (i = (cur_id + 1) % NENV; i != cur_id; i = (i + 1) % NENV) {
-		if (envs[i].env_status == ENV_RUNNABLE)
+		if (envs[i].env_type != ENV_TYPE_IDLE &&
+			envs[i].env_status == ENV_RUNNABLE)
 			break;
 	}
 	if (i != cur_id)
 		env_run(&envs[i]);
-	else if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+	else if (thiscpu->cpu_env && thiscpu->cpu_env->env_status == ENV_RUNNING)
 		env_run(thiscpu->cpu_env);
 
 	// sched_halt never returns
+	idle_env = &envs[0];
+	if (idle_env->env_status != ENV_RUNNING && idle_env->env_status != ENV_RUNNABLE)
+		panic("No idle environment, CPU %d !", cpunum());
+	env_run(idle_env);
 	sched_halt();
 }
 
@@ -53,7 +58,6 @@ sched_halt(void)
 {
 	int i;
 
-	warn("Shit");
 	// For debugging and testing purposes, if there are no runnable
 	// environments in the system, then drop into the kernel monitor.
 	for (i = 0; i < NENV; i++) {
