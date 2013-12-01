@@ -69,14 +69,23 @@ static const char *trapname(int trapno)
 void
 trap_init(void)
 {
-	extern struct Segdesc gdt[];
 
 	// LAB 3: Your code here.
+	extern uint32_t trap_handlers[];
+	uint32_t i;
+	// Init handlers
+	for (i = 0; i <= 255; i++)
+		SETGATE(idt[i], 0, GD_KT, trap_handlers[i], 0);
+	// Init breakpoint
+	SETGATE(idt[T_BRKPT], 0, GD_KT, trap_handlers[T_BRKPT], 3);
+	// Init syscall
+	SETGATE(idt[T_SYSCALL], 0, GD_KT, trap_handlers[T_SYSCALL], 3);
 
 	// Per-CPU setup 
 	trap_init_percpu();
 }
 
+extern struct Segdesc gdt[];
 // Initialize and load the per-CPU TSS and IDT
 void
 trap_init_percpu(void)
@@ -173,6 +182,11 @@ trap_dispatch(struct Trapframe *tf)
 {
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
+	int r;
+	if (tf->tf_trapno == T_PGFLT) {
+		page_fault_handler(tf);
+		return;
+	}
 
 	// Handle spurious interrupts
 	// The hardware sometimes raises these because of noise on the
@@ -186,6 +200,29 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
+
+	if (tf->tf_trapno == T_BRKPT) {
+		monitor(tf);
+		return;
+	}
+
+	if (tf->tf_trapno == T_DEBUG) {
+		monitor(tf);
+		return;
+	}
+
+	if (tf->tf_trapno == T_SYSCALL) {
+		r = syscall(tf->tf_regs.reg_eax,
+			tf->tf_regs.reg_edx,
+			tf->tf_regs.reg_ecx,
+			tf->tf_regs.reg_ebx,
+			tf->tf_regs.reg_edi,
+			tf->tf_regs.reg_esi);
+		if (r < 0)
+			panic("trap_dispatch: %e\n", r);
+		tf->tf_regs.reg_eax = r;
+		return;
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
@@ -267,7 +304,13 @@ page_fault_handler(struct Trapframe *tf)
 
 	// Handle kernel-mode page faults.
 
-	// LAB 3: Your code here.
+	// LAB 3: Your code here.	
+	if ((tf->tf_cs & 3) != 3) {
+		// My hint: from comments in trap()
+		print_trapframe(tf);
+		panic("page_fault_handler: Kernel Page Fault");
+	}
+
 
 	// We've already handled kernel-mode exceptions, so if we get here,
 	// the page fault happened in user mode.

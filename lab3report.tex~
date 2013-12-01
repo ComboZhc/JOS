@@ -1,0 +1,966 @@
+\documentclass[11pt]{article}
+\usepackage[top=1in, bottom=1in, left=1.25in, right=1.25in]{geometry}
+\usepackage[BoldFont,SlantFont,CJKsetspaces,CJKchecksingle]{xeCJK}
+\usepackage{framed}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{hyperref}
+\setCJKmainfont[BoldFont=SimHei]{SimSun}
+\setCJKmonofont{SimSun}
+\usepackage{graphicx}
+\usepackage{color}
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+\lstset{ %
+  backgroundcolor=\color{white},
+  basicstyle=\ttfamily,
+  breakatwhitespace=false,
+  breaklines=true,
+  captionpos=t,
+  commentstyle=\color{mygreen},
+  columns=flexible,
+  deletekeywords={...},
+  escapeinside={\%*}{*)},
+  extendedchars=true,
+  frame=single,
+  keepspaces=true,
+  keywordstyle=\color{blue},
+  language=C,
+  morekeywords={*,...},
+  numbers=none,
+  rulecolor=\color{black},
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  stepnumber=1,
+  stringstyle=\color{mymauve},
+  tabsize=2,
+  title=\lstname
+}
+\newenvironment{packed_enum}{
+\begin{enumerate}
+  \setlength{\itemsep}{1pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{enumerate}}
+\parindent 2em
+
+\begin{document}
+\title{\textbf{\huge{实验报告 Lab3}}\\
+10300240039 章超}
+\maketitle
+\section{User Environments and Exception Handling}
+
+因为JOS中对于Environment提供的语义与传统UNIX中的Process并不相同。所以在JOS中，Environment与Process可以看作是等价的。所以第一部分也就是要我们实现用户的进程。
+
+Kernel使用\lstinline|Env|来跟踪每个用户进程（与OS中的进程控制块的概念类似）。而且在Lab3里面，我们只会创建一个进程。这就是说，Kernel加载完成后，将控制权交给某个用户进程，用户进程运行结束后就将控制权还给Kernel。JOS使用\lstinline|envs|数组来跟踪所有用户进程，\lstinline|curenv|来表示当前执行的进程，初始时为空。\lstinline|env_free_list|来表示空闲进程链表（与空闲页表\lstinline|page_free_list|表示类似)。
+
+在\lstinline|kern/env.c|中，\lstinline|env_init|用于被\lstinline|i386_init|调用，初始化用户进程环境。\lstinline|env_create|用于创建用户进程。\lstinline|env_run|用于Kernel将控制权交给执行用户进程，\lstinline|env_destroy|用于终止用户进程，并将控制权交给Kernel。
+
+\subsection{Environment State}
+
+\lstinline|Env|，也就是进程中，保存了如下信息：
+\begin{itemize}
+\item \lstinline|env_tf|，保存了进程的寄存器等信息，以便从其他进程或者Kernel恢复时能够继续执行，这部分在Part B中会用到。
+\item \lstinline|env_link|，在\lstinline|env_free_list|链表中的下一个空闲进程的指针。
+\item \lstinline|env_id|，用于标识进程。
+\item \lstinline|env_parent_id|，用于标识这个进程的父进程。
+\item \lstinline|env_type|，用于表示这个进程的类型，在Lab3中只有\lstinline|ENV_TYPE_USER|这个类型，表示用户进程。
+\item \lstinline|env_status|，用于表示这个进程的执行状态。OS课上讲到过。
+\item \lstinline|env_pgdir|，用于表示这个进程虚拟空间的页目录。\lstinline|env_tf|与\lstinline|env_pgdir|耦合在一起，用于表示线程和地址空间。
+\end{itemize}
+
+\subsection{Allocating the Environments Array}
+\begin{framed}
+\noindent\textbf{Exercise 1}Modify \lstinline|mem_init()| in \lstinline|kern/pmap.c| to allocate and map the envs array. This array consists of exactly NENV instances of the Env structure allocated much like how you allocated the pages array. Also like the pages array, the memory backing envs should also be mapped user read-only at UENVS (defined in \lstinline|inc/memlayout.h|) so user processes can read from this array.
+
+You should run your code and make sure \lstinline|check_kern_pgdir()| succeeds. 
+\end{framed}
+这一部分的目的就是为进程在物理内存中分配空间。这个与Lab2中分配页目录几乎一样，我们代码如下：
+\begin{lstlisting}[title=kern/pmap.c]
+	envs = (struct Env*) boot_alloc(NENV * sizeof(struct Env));
+	..
+	boot_map_region(kern_pgdir,
+		UENVS,
+		ROUNDUP(NENV * sizeof(struct Env), PGSIZE),
+		PADDR(envs),
+		PTE_U | PTE_P
+		);
+\end{lstlisting}
+一开始做的时候我把权限不小心打错了，于是在Exercise 8里面中枪，调试了好久才发现原来Lab3描述里就有说需要重新检查一下\lstinline|pmap.c|的代码。
+
+\subsection{Creating and Running Environments}
+\begin{framed}
+\noindent\textbf{Exercise 2}In the file \lstinline|env.c|, finish coding the following functions:
+
+\noindent\lstinline|env_init()|
+
+    Initialize all of the Env structures in the envs array and add them to the \lstinline|env_free_list|. Also calls \lstinline|env_init_percpu|, which configures the segmentation hardware with separate segments for privilege level 0 (kernel) and privilege level 3 (user).
+
+\noindent\lstinline|env_setup_vm()|
+
+    Allocate a page directory for a new environment and initialize the kernel portion of the new environment's address space.
+
+\noindent\lstinline|region_alloc()|
+
+    Allocates and maps physical memory for an environment
+
+\noindent\lstinline|load_icode()|
+
+    You will need to parse an ELF binary image, much like the boot loader already does, and load its contents into the user address space of a new environment.
+
+\noindent\lstinline|env_create()|
+
+    Allocate an environment with \lstinline|env_alloc| and call \lstinline|load_icode| load an ELF binary into it.
+    
+\noindent\lstinline|env_run()|
+
+    Start a given environment running in user mode.
+
+As you write these functions, you might find the new cprintf verb \lstinline|%e| useful -- it prints a description corresponding to an error code. For example,
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+	r = -E_NO_MEM;
+	panic("env_alloc: %e", r);
+\end{lstlisting}
+
+will panic with the message "env\_alloc: out of memory". 
+\end{framed}
+
+\subsubsection{\lstinline|env_init|}
+这个函数所要完成的功能与\lstinline|page_init|类似，为每一个\lstinline|Env|进行初始化。注释中已经写明了，每个\lstinline|envs|中的\lstinline|Env|都必须是可用，\lstinline|env_id|为0，而且要加入空闲链表中。值得注意的是，因为\lstinline|i386_init|中通过\lstinline|env_run(&envs[0]);|执行了第一个用户进程，所以我们必须保证第一个用户进程应该要存放在\lstinline|envs[0]|中，也就是说空闲链表在初始化完成以后的头指针为\lstinline|&envs[0]|。
+
+代码如下:
+\begin{lstlisting}[title=kern/env.c]
+void
+env_init(void)
+{
+	// Set up envs array
+	// LAB 3: Your code here.
+	int i;
+	for (i = 0; i < NENV; i++) {
+		envs[i].env_id = 0;
+		envs[i].env_parent_id = 0;
+		envs[i].env_type = ENV_TYPE_USER;
+		envs[i].env_status = ENV_FREE;
+		envs[i].env_runs = 0;
+		envs[i].env_pgdir = NULL;
+		if (i == 0)
+			env_free_list = envs;
+		else
+			envs[i - 1].env_link = &envs[i]; 
+	}
+	envs[NENV - 1].env_link = NULL;
+
+	// Per-CPU part of the initialization
+	env_init_percpu();
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|env_setup_vm|}
+这个函数的功能是，为传入的\lstinline|Env|分配页目录，设置\lstinline|env_pgdir|并初始化页目录。
+
+根据提示，我们知道在\lstinline|UTOP|之上，除了\lstinline|UVPT|，所有的用户进程的虚拟空间映射是一致的。
+在\lstinline|UTOP|之下，因为是用户进程的私有空间，所以一开始都置为0。
+而对于\lstinline|UVPT|，我们可以从\lstinline|kern_pgdir|拷贝一份页目录来。这是因为在Kernel初始化时，\lstinline|kern_pgdir|的相应权限已经设置好，用户是没有写权限的。不用担心用户会破坏这些物理地址的内容。
+
+对于黄睿哲报告中的第一个问题，用户进程是否会恶意修改Kernel的页目录，我觉得这个问题是不成立的。首先这个函数的最后一行并没有设置用户可写的权限。另外即使用户可写，我们也只是从Kernel的页目录拷贝一份过来，而且相应的权限已经设置好，即使用户进程修改了自己的页目录，也不会直接知道Kernel的页目录在哪里。第二个问题，缺少Kernel中\lstinline|kern_pgdir|更改之后的更新机制，我觉得这个倒是有必要考虑的。如果Kernel申请了更多的页，那么用户进程是不知道Kernel的操作，于是在系统调用的时候，用户进程可能会需要访问Kernel新申请的页，从而导致权限错误。
+
+拷贝时候我们需要用的函数有两个选择，一个是\lstinline|memmove|，另外一个是\lstinline|memcpy|。通常我们在用户程序中会写\lstinline|memcpy|，但后来我在查阅资料时发现库函数（也就是我们实现的JOS)应该尽量使用\lstinline|memmove|，因为这个函数能够处理解决源区域与目标区域重叠的情况。我一开始写的是\lstinline|memcpy|，没有发现任何问题，这是因为在\lstinline|lib/string.c|中,\lstinline|memcpy|直接调用了\lstinline|memmove|。所以为了排除隐患，我最后还是改成了\lstinline|memmove|。
+
+\begin{lstlisting}[title=kern/env.c]
+static int
+env_setup_vm(struct Env *e)
+{
+	int i;
+	struct PageInfo *p = NULL;
+
+	// Allocate a page for the page directory
+	if (!(p = page_alloc(ALLOC_ZERO)))
+		return -E_NO_MEM;
+
+	// Now, set e->env_pgdir and initialize the page directory.
+
+	// LAB 3: Your code here.
+	e->env_pgdir = page2kva(p);
+	memmove(e->env_pgdir, kern_pgdir, PGSIZE);
+	memset(e->env_pgdir, 0, PDX(UTOP) * sizeof(pde_t));
+	p->pp_ref++;
+
+	// UVPT maps the env's own page table read-only.
+	// Permissions: kernel R, user R
+	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U;
+
+	return 0;
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|env_alloc|}
+这个函数不需要我们实现，而且又与\lstinline|page_alloc|类似。不过这个函数有两点值得我们注意。
+
+一个是\lstinline|env_id|的设置。一个合理的\lstinline|env_id|有如下的结构：
+
+\begin{lstlisting}[title=inc/env.h]
+// +1+---------------21-----------------+--------10--------+
+// |0|          Uniqueifier             |   Environment    |
+// | |                                  |      Index       |
+// +------------------------------------+------------------+
+\end{lstlisting}
+也就是说，除了Index外，一个\lstinline|env_id|还用21位来作为标识，用来区分在不同时间创建的相同Index的用户进程。而\lstinline|env_id|的生成方式为
+\begin{lstlisting}[title=kern/env.c]
+	generation = (e->env_id + (1 << ENVGENSHIFT)) & ~(NENV - 1);
+	if (generation <= 0)	// Don't create a negative env_id.
+		generation = 1 << ENVGENSHIFT;
+	e->env_id = generation | (e - envs);
+\end{lstlisting}
+我们可以看到\lstinline|generation|就是原先的\lstinline|env_id|的高21位再增加1，所以\lstinline|generation|不断自增，且保证为正。
+
+\lstinline|Env|中的段寄存器在这个\lstinline|env_alloc|中设置了DPL = 3，也就是设置了用户模式。
+
+\subsubsection{\lstinline|region_alloc|}
+这个函数的功能是为用户进程分配从虚拟地址\lstinline|va|开始，长度为\lstinline|len|自节的物理页面。需要注意的是，我们需要将\lstinline|va|和\lstinline|len|分别与\lstinline|PGSIZE|对齐。
+
+另外，打印错误的时候可以用\lstinline|%e|，这是因为\lstinline|printfmt|中实现了基于\lstinline|error_string|数组的输出。
+\begin{lstlisting}[title=kern/env.c]
+static void
+region_alloc(struct Env *e, void *va, size_t len)
+{
+	// LAB 3: Your code here.
+	// (But only if you need it for load_icode.)
+
+	struct PageInfo* p = NULL;
+	uint32_t i = 0;
+	int r = 0;
+	for (i = ROUNDDOWN((uint32_t)va, PGSIZE); i < ROUNDUP((uint32_t)va + len, PGSIZE); i+=PGSIZE) {
+		p = page_alloc(0);
+		if (p == NULL)
+			panic("region_alloc: Out of memory!\n");
+		r = page_insert(e->env_pgdir, p, (void*)i, PTE_W | PTE_U | PTE_P);
+		if (r < 0)
+			panic("region_alloc: %e\n", r);
+	}
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|load_icode|}
+
+这个函数的功能是将用户进程的可执行代码读入内存。由于JOS目前还没有文件系统,所以采用的方法是将希望运行的用户程序编译后和Kernel链接到一起，也就是通过读入ELF可执行文件的方式载入。这段代码将ELF读入到ELF头中指定的虚拟地址。同时将ELF头中指定但是不在ELF存储空间中的区域设为0，比如程序的bss段（包含静态变量等）。读入的代码可以参考Bootloader。
+
+我的实现如下：
+\begin{lstlisting}[title=kern/env.c]
+static void
+load_icode(struct Env *e, uint8_t *binary, size_t size)
+{
+	// LAB 3: Your code here.
+	struct Elf *elf = (struct Elf*)binary;
+	struct Proghdr *ph, *eph;
+	if (elf->e_magic != ELF_MAGIC)
+		panic("load_icode: Elf header is not correct");
+	ph = (struct Proghdr *) ((uint8_t *) elf + elf->e_phoff);
+	eph = ph + elf->e_phnum;
+	lcr3(PADDR(e->env_pgdir));
+	for (; ph < eph; ph++)
+		if (ph->p_type == ELF_PROG_LOAD) {
+			if (ph->p_filesz > ph->p_memsz)
+				panic("load_icode: File size is larger than memory size");
+			region_alloc(e, (void*)ph->p_va, ph->p_memsz);
+			memmove((void*)ph->p_va, binary + ph->p_offset, ph->p_filesz);
+			memset((void*)ph->p_va + ph->p_filesz, 0, ph->p_memsz - ph->p_filesz);
+		}
+
+	// Hint in env_alloc
+	e->env_tf.tf_eip = elf->e_entry;
+
+	// Now map one page for the program's initial stack
+	// at virtual address USTACKTOP - PGSIZE.
+
+	// LAB 3: Your code here.
+	region_alloc(e, (void*)USTACKTOP - PGSIZE, PGSIZE);
+	lcr3(PADDR(kern_pgdir));
+}
+\end{lstlisting}
+
+其中有几点需要注意的：
+
+一个是\lstinline|p_memsz|与\lstinline|p_filesz|不一样。前者是ELF文件在内存中实际占据的空间大小，后者是代码占据的空间大小。所以前者必须大于或等于后者，我在这里先加了这个判断。然后将代码载入，再将前者大于后者的部分置为0。
+
+第二个是我们需要在读入代码的时候先将\lstinline|e->envpgdir|设为当前页目录。这是因为我们读入的代码是要载入到用户进程中的，由用户去执行的。在读入完成后我们再恢复Kernel的页目录。我不知道黄睿哲为什么会觉得这个设置是没有用的。而且如果将这一步骤去掉，\lstinline|make grade|是无法通过的。
+
+最后一个是为用户进程分配栈空间，这里暂时只分配一页。
+
+\subsubsection{\lstinline|env_create|}
+
+这个函数的作用非常明确，新建一个用户进程。首先初始化这个用户进程，然后读入代码，最后设置相应的类型。
+\begin{lstlisting}[title=kern/env.c]
+void
+env_create(uint8_t *binary, size_t size, enum EnvType type)
+{
+	// LAB 3: Your code here.
+	struct Env* e;
+	int r = env_alloc(&e, 0);
+	if (r < 0)
+		panic("env_create: %e\n", r);
+	load_icode(e, binary, size);
+	e->env_type = type;
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|env_run|}
+这个函数的功能是运行一个用户进程。只需要按照注释一步一步来就好了：如果当前进程与要执行的进程不同，就设置一下当前进程为\lstinline|ENV_RUNNABLE|，然后设置当前进程为要执行的进程，增加计数，设置页目录。最后调用\lstinline|env_pop_tf()|。实现如下：
+\begin{lstlisting}[title=kern/env.c]
+void
+env_run(struct Env *e)
+{
+	if (curenv != e) {
+		if (curenv && curenv->env_status == ENV_RUNNING)
+			curenv->env_status = ENV_RUNNABLE;
+		curenv = e;
+		e->env_status = ENV_RUNNING;
+		e->env_runs ++;
+		lcr3(PADDR(e->env_pgdir));
+	}
+	env_pop_tf(&(e->env_tf));
+}
+\end{lstlisting}
+
+最后一行\lstinline|env_pop_tf()|的调用值得一看。这里用\lstinline|%esp|设置为\lstinline|tf|，用\lstinlnine|popal|来恢复所有的寄存器值，用\lstinline|popl|来恢复所有段寄存器，最后用\lstinline|iret|设置CS,IP和FLAGS。然后函数就不用返回了，因为已经设置了新的CS,IP。最后一个\lstinline|panic|只是用来通过编译器的检查。
+\begin{lstlisting}[title=kern/env.c]
+void
+env_pop_tf(struct Trapframe *tf)
+{
+	__asm __volatile("movl %0,%%esp\n"
+		"\tpopal\n"
+		"\tpopl %%es\n"
+		"\tpopl %%ds\n"
+		"\taddl $0x8,%%esp\n" /* skip tf_trapno and tf_errcode */
+		"\tiret"
+		: : "g" (tf) : "memory");
+	panic("iret failed");  /* mostly to placate the compiler */
+}
+\end{lstlisting}
+
+\subsection{Handling Interrupts and Exceptions}
+我们通过Exercise 3来了解中断机制。
+\begin{framed}
+\noindent\textbf{Exercise 3}Read Chapter 9, Exceptions and Interrupts in the 80386 Programmer's Manual (or Chapter 5 of the IA-32 Developer's Manual), if you haven't already. 
+\end{framed}
+中断是外部产生的，有可屏蔽中断(INTR)和不可屏蔽中断(NMI)。
+异常是内部产生的，处理器异常包括Fault/Trap/Abort，可编程异常（软件异常），比如\lstinline|INTO|, \lstinline|INT 3|, \lstinline|INT n|等。
+
+9.1节主要说明了中断和异常由数字表示标识，NMI和处理器异常标识在0-31之间，其他中断和异常标识在32-255之间。
+
+9.2节主要说明了如何开启和屏蔽中断，一个NMI会屏蔽其他NMI，设置IF位可以屏蔽INTR，设置RF位可以屏蔽DEBUG Fault，对\lstinline|SS|的\lstinline|MOV|和\lstinline|POP|操作也会屏蔽一些中断和异常（这是由于要维持\lstinline|SS|和\lstinline|ESP|的一致性）
+
+9.3节介绍了当多个中断和异常同时发生时，中断和异常的优先级和CPU响应顺序。
+
+9.4节介绍了中断描述符表IDT。IDT每一项是8字节，至多有256项，而且可以在物理内存中的任意位置。
+
+9.5节介绍了中断描述符的具体结构。
+
+9.6节介绍了中断任务和中断过程，JOS只涉及到中断过程(Interrupt Procedure)。中断任务与第7章的多道任务有关，这里不详述。
+
+首先，一个中断过程调用Handler与\lstinline|CALL|调用一个Call Gate类似。CPU会将\lstinline|EFLAGS|, \lstinline|CS|, \lstinline|EIP|, \lstinline|ERROR CODE|, \lstinline|SS|, \lstinline|ESP|等压入中断过程栈（中断过程有一个专门的栈）。
+
+然后，从中断过程返回时，调用了\lstinline|IRET|，它比\lstinline|RET|还要多弹出一个\lstinline|EFLAGS|。
+
+再次，中断发生以后CPU会自己重置\lstinline|TF|的值,防止单步跟踪调试对中断服务的影响。只有当中断过程完成以后,CPU 才会将\lstinlie|TF|重新设置成原来的值。从Interrupt Gate进入的中断程序还会重新设置 IF 使得其他中断不能打断当前中断过程。而从Trap Gate进入的则不会（嵌套中断）。
+
+最后，中断过程的权限必须超过引发中断程序的权限，不然会导致一个保护异常被触发。
+
+9.7节介绍了错误码的格式。
+
+9.8节详细描述了每个处理器异常。
+
+9.9和9.10节分别总结了每个处理器异常和错误码。
+
+\subsection{Basics of Protected Control Transfer}
+受保护的控制转移意思是，中断和异常都有可能使得CPU从用户态切换到内核态，但不能使用户进程对Kernel和其他进程进行干扰。简单地说,当用户进程需要执行特权指令或者内核功能时,或者中断和异常事件发生时,用户进程不能够自己决定它要进入Kernel的哪里去执行;而是 CPU 提供IDT和TSS（任务状态段）一起保证从用户态进入内核态是受约束的。
+
+\subsection{Setting Up the IDT}
+\begin{framed}
+\noindent\textbf{Exercise 4} Edit \lstinline|trapentry.S| and \lstinline|trap.c| and implement the features described above. The macros \lstinline|TRAPHANDLER| and \lstinline|TRAPHANDLER_NOEC| in \lstinline|trapentry.S| should help you, as well as the \lstinline|T_*| defines in \lstinline|inc/trap.h|. You will need to add an entry point in \lstinline|trapentry.S| (using those macros) for each trap defined in \lstinline|inc/trap.h|, and you'll have to provide \lstinline|_alltraps| which the \lstinline|TRAPHANDLER| macros refer to. You will also need to modify \lstinline|idt_init()| to initialize the idt to point to each of these entry points defined in \lstinline|trapentry.S|; the \lstinline|SETGATE| macro will be helpful here.
+
+Your \lstinline|_alltraps| should:
+\\
+1. push values to make the stack look like a struct \lstinline|Trapframe| \\
+2. load \lstinline|GD_KD| into \lstinline|%ds| and \lstinline|%es| \\
+3. pushl \lstinline|%esp| to pass a pointer to the Trapframe as an argument to \lstinline|trap()| \\
+4. call trap (can trap ever return?) \\
+
+Consider using the pushal instruction; it fits nicely with the layout of the struct Trapframe.
+
+Test your trap handling code using some of the test programs in the user directory that cause exceptions before making any system calls, such as user/divzero. You should be able to get make grade to succeed on the divzero, softint, and badsegment tests at this point. 
+\end{framed}
+
+这个练习要求我们建立IDT。IDT的本质是一个数组。中断处理的流程为：CPU->IDT->handler in \lstinline|trapentry.S|->\lstinline|trap(Trapfram* tf)|。
+
+我们的实现分为两个部分，首先要实现handler。在进入handler之前，CPU已经压入了\lstinline|EFLAGS|,\lstinline|CS|,\lstinline|IP|,对于一些指令还压入了Error code。\lstinline|trapentry.S|中有两个宏，一个是\lstinline|TRAPHANDLER|和\lstinline|TRAPHANDLER_NOEC|。后者通过多压入了一个0以保证结构一致，然后二者都跳到\lstinline|_alltraps|进行后续处理。
+
+这里我们需要区别哪些handler要用\lstinline|TRAPHANDLER|，而哪些要用\lstinline|TRAPHANDLER|。\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_10.htm}这里给出了0-16的handler的error code描述，但还是不够。因为\lstinline|trap.h|中定义了19个，我们需要在IA-32手册中才能找到 \url{http://pdos.csail.mit.edu/6.828/2012/readings/ia32/IA32-3A.pdf}。
+
+这里我们还定义了\lstinline|trap_handlers|，用于形成一个\lstinline|trap_handlers|数组，从而使\lstinline|trap.c|的代码更简洁。这些内容都是Challenge 1的要求。
+
+\lstinline|_alltraps|的实现在题目描述中已经有了，先将寄存器值压入栈，使得栈与\lstinline|Trapframe|结构一致；然后设置好段寄存器；再送入栈顶指针；最后调用\lstinline|trap|。
+
+\lstinline|trapentry.S|上的工作如下：
+
+\begin{lstlisting}[title=kern/trapentry.S]
+.data
+	.globl trap_handlers
+trap_handlers:
+    .long trhdlr0
+    .long trhdlr1
+    .long trhdlr2
+    .long trhdlr3
+    .long trhdlr4
+    .long trhdlr5
+    .long trhdlr6
+    .long trhdlr7
+    .long trhdlr8
+    .long trhdlr9
+    ...
+.text
+	TRAPHANDLER_NOEC(trhdlr0, 0)
+	TRAPHANDLER_NOEC(trhdlr1, 1)
+	TRAPHANDLER_NOEC(trhdlr2, 2)
+	TRAPHANDLER_NOEC(trhdlr3, 3)
+	TRAPHANDLER_NOEC(trhdlr4, 4)
+	TRAPHANDLER_NOEC(trhdlr5, 5)
+	TRAPHANDLER_NOEC(trhdlr6, 6)
+	TRAPHANDLER_NOEC(trhdlr7, 7)
+	TRAPHANDLER(trhdlr8, 8)
+	TRAPHANDLER_NOEC(trhdlr9, 9)
+	TRAPHANDLER(trhdlr10, 10)
+	TRAPHANDLER(trhdlr11, 11)
+	TRAPHANDLER(trhdlr12, 12)
+	TRAPHANDLER(trhdlr13, 13)
+	TRAPHANDLER(trhdlr14, 14)
+	TRAPHANDLER(trhdlr15, 15)
+	TRAPHANDLER_NOEC(trhdlr16, 16)
+	TRAPHANDLER(trhdlr17, 17)
+	TRAPHANDLER_NOEC(trhdlr18, 18)
+	TRAPHANDLER_NOEC(trhdlr19, 19)
+    ...
+_alltraps:
+	pushw $0x0
+	pushw %ds
+	pushw $0x0
+	pushw %es
+	pushal
+
+	movw $GD_KD, %ax
+	movw %ax, %ds
+	movw %ax, %es
+
+	pushl %esp
+	call trap
+\end{lstlisting}
+
+对于\lstinline|trap.c|，我们通过\lstinline|SET_GATE|来在IDT中注册相关的handler。如果没有使用
+\lstinline|trap_handlers|数组，我们就需要为每一个handler写一个\lstinline|extern|声明，就显得不简洁了。
+\begin{lstlisting}[title=kern/trap.c]
+void
+trap_init(void)
+{
+
+	// LAB 3: Your code here.
+	extern uint32_t trap_handlers[];
+	uint32_t i;
+	// Init handlers
+	for (i = 0; i <= 255; i++)
+		SETGATE(idt[i], 0, GD_KT, trap_handlers[i], 0);
+	// Init breakpoint
+	SETGATE(idt[T_BRKPT], 0, GD_KT, trap_handlers[T_BRKPT], 3);
+	// Init syscall
+	SETGATE(idt[T_SYSCALL], 0, GD_KT, trap_handlers[T_SYSCALL], 3);
+
+	// Per-CPU setup 
+	trap_init_percpu();
+}
+\end{lstlisting}
+
+\begin{framed}
+\noindent\textbf{Question}
+
+1. What is the purpose of having an individual handler function for each exception/interrupt? (i.e., if all exceptions/interrupts were delivered to the same handler, what feature that exists in the current implementation could not be provided?)
+
+2. Did you have to do anything to make the user/softint program behave correctly? The grade script expects it to produce a general protection fault (trap 13), but softint's code says \lstinline|int $14|. Why should this produce interrupt vector 13? What happens if the kernel actually allows softint's \lstinline|int $14| instruction to invoke the kernel's page fault handler (which is interrupt vector 14)?
+\end{framed}
+
+1. 因为调用handler的时候，CPU并不会显示地“传入”当前中断的标识序号，所以我们必须为每一个异常/中断设置一个独立的handler。并且我们也不知道CPU是否压入了Error code.
+
+2. 我们IDT中设置的page fault(14)的中断的DPL权限为0，也就是说只有内核才能产生该中断。因此用户程序越权了，CPU产生一个general protection fault(13)进行保护。如果允许用户程序产生page fault中断,那么恶意用户程序可能会不断地调用,将物理内存占满。
+
+\section{Page Faults, Breakpoints Exceptions, and System Calls}
+\subsection{Handling Page Faults}
+\begin{framed}
+\noindent\textbf{Exercise 5} Modify \lstinline|trap_dispatch()| to dispatch page fault exceptions to \lstinline|page_fault_handler()|. You should now be able to get make grade to succeed on the \lstinline|faultread|, \lstinline|faultreadkernel|, \lstinline|faultwrite|, and \lstinline|faultwritekernel| tests. If any of them don't work, figure out why and fix them. Remember that you can boot JOS into a particular user program using \lstinline|make run-x| or make \lstinline|run-x-nox|.
+\end{framed}
+
+这个练习要求我们完成\lstinline|page_fault_handler|的处理情况。我们在\lstinline|trap_dispatch()|中，只需要将中断过程引入到\lstinline|page_fault_handler()|就可以了，实现如下:
+
+\begin{lstlisting}[title=kern/trap.c]
+static void
+trap_dispatch(struct Trapframe *tf)
+{
+	// Handle processor exceptions.
+	// LAB 3: Your code here.
+	int r;
+	if (tf->tf_trapno == T_PGFLT) {
+		page_fault_handler(tf);
+		return;
+	}
+	...
+	// Unexpected trap: The user process or the kernel has a bug.
+	print_trapframe(tf);
+	if (tf->tf_cs == GD_KT)
+		panic("unhandled trap in kernel");
+	else {
+		env_destroy(curenv);
+		return;
+	}
+}
+\end{lstlisting}
+
+
+\subsection{The Breakpoint Exception}
+\begin{framed}
+\noindent\textbf{Exercise 6} Modify \lstinline|trap_dispatch()| to make breakpoint exceptions invoke the kernel monitor. You should now be able to get make grade to succeed on the breakpoint test. 
+\end{framed}
+
+这个练习也比较简单，在 \lstinline|trap_dispatch()|中，将中断过程引入到Kernel monitor就好了，实现如下:
+\begin{lstlisting}[title=kern/trap.c]
+static void
+trap_dispatch(struct Trapframe *tf)
+{
+	...
+	if (tf->tf_trapno == T_BRKPT) {
+		monitor(tf);
+		return;
+	}
+	...
+}
+\end{lstlisting}
+
+\begin{framed}
+\noindent\textbf{Question}
+
+3. The break point test case will either generate a break point exception or a general protection fault depending on how you initialized the break point entry in the IDT (i.e., your call to \lstinline|SETGATE| from \lstinline|idt_init|). Why? How did you need to set it in order to get the breakpoint exception to work as specified above?
+
+4. What do you think is the point of these mechanisms, particularly in light of what the user/softint test program does?
+\end{framed}
+
+3. 产生break point exception还是protection exception取决于IDT的设置。如果在初始化IDT时把中断描述符的DPL权限级别设为3，那么用户态下可以产生这个break point中断。如果中断描述符的DPL设为0,那么将产生protection exception。
+
+4. 这涉及到了Protected Control Transfer(受保护的控制转移机制)问题。必须保证不让用户进程对Kernel进行干扰。因为softint试图产生page fault异常，但我们之前设置IDT时把其DPL设为0，也就是说这是一个内核级中断/异常，用户程序越权了，所以有protection fault.
+
+\subsection{System calls}
+\begin{framed}
+\noindent\textbf{Exercise 7} Add a handler in the kernel for interrupt vector \lstinline|T_SYSCALL|. You will have to edit \lstinline|kern/trapentry.S| and \lstinline|kern/trap.c|'s \lstinline|idt_init()|. You also need to change \lstinline|trap_dispatch()| to handle the system call interrupt by calling \lstinline|syscall()| (defined in \lstinline|kern/syscall.c|) with the appropriate arguments, and then arranging for the return value to be passed back to the user process in \lstinline|%eax|. Finally, you need to implement \lstinline|syscall()| in \lstinline|kern/syscall.c|. Make sure \lstinline|syscall()| returns \lstinline|-E_INVAL| if the system call number is invalid. You should read and understand \lstinline|lib/syscall.c| (especially the inline assembly routine) in order to confirm your understanding of the system call interface. You may also find it helpful to read \lstinline|inc/syscall.h|.
+
+Run the \lstinline|user/hello| program under your kernel (\lstinline|make run-hello|). It should print "hello, world" on the console and then cause a page fault in user mode. If this does not happen, it probably means your system call handler isn't quite right. You should also now be able to get make grade to succeed on the testbss test.
+
+\end{framed}
+用户可以通过系统调用来使用系统服务，但需要注意的是，用户调用的是\lstinline|lib/syscall.c|。这里面会产生system call中断，从而触发\lstinline|kern/syscall.c|。
+
+这个练习要求我们实现系统调用。
+首先，我们在\lstinline|kern/trapentry.S|中已经加入了256个handler。
+然后，我们在\lstinline|trap_init|中设置相应权限。
+\begin{lstlisting}[title=kern/trap.c]
+	SETGATE(idt[T_SYSCALL], 0, GD_KT, trap_handlers[T_SYSCALL], 3);
+\end{lstlisting}
+再然后，我们在\lstinline|trap_dispatch|中添加相应的handler，并且传入参数:
+\begin{lstlisting}[title=kern/trap.c]
+	if (tf->tf_trapno == T_SYSCALL) {
+		r = syscall(tf->tf_regs.reg_eax,
+			tf->tf_regs.reg_edx,
+			tf->tf_regs.reg_ecx,
+			tf->tf_regs.reg_ebx,
+			tf->tf_regs.reg_edi,
+			tf->tf_regs.reg_esi);
+		tf->tf_regs.reg_eax = r;
+		return;
+	}
+\end{lstlisting}
+最后在\lstinline|kern/syscall.c|中实现\lstinline|syscall|:
+\begin{lstlisting}[title=kern/syscall.c]
+int32_t
+syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+{
+	// Call the function corresponding to the 'syscallno' parameter.
+	// Return any appropriate return value.
+	// LAB 3: Your code here.
+	int r;
+	switch(syscallno) {
+		case SYS_cputs:
+			sys_cputs((const char*)a1, (size_t)a2);
+			return 0;
+		case SYS_cgetc:
+			r = sys_cgetc();
+			return r;
+		case SYS_getenvid:
+			r = sys_getenvid();
+			return r;
+		case SYS_env_destroy:
+			r = sys_env_destroy((envid_t)a1);
+			return r;
+		default:
+			return -E_INVAL;
+	}
+}
+\end{lstlisting}
+\subsection{User-mode startup}
+\begin{framed}
+\noindent\textbf{Exercise 8} Add the required code to the user library, then boot your kernel. You should see user/hello print "hello, world" and then print "i am environment 00000800". user/hello then attempts to "exit" by calling \lstinline|sys_env_destroy()| (see \lstinline|lib/libmain.c| and \lstinline|lib/exit.c|). Since the kernel currently only supports one user environment, it should report that it has destroyed the only environment and then drop into the kernel monitor. You should be able to get \lstinline|make grade| to succeed on the hello test. 
+\end{framed}
+
+这个练习也很简单，只需要加上一行。
+\begin{lstlisting}
+	thisenv = &envs[ENVX(sys_getenvid())];
+\end{lstlisting}
+但不幸的是，我在这里抛出了一个异常。原因是因为在\lstinline|map_init|时候没有设置好相应页的权限。
+
+\subsection{Page faults and memory protection}
+\begin{framed}
+\noindent\textbf{Exercise 9} Change \lstinline|kern/trap.c| to panic if a page fault happens in kernel mode.
+
+Hint: to determine whether a fault happened in user mode or in kernel mode, check the low bits of the \lstinline|tf_cs|.
+
+Read \lstinline|user_mem_assert| in \lstinline|kern/pmap.c| and implement \lstinline|user_mem_check| in that same file.
+
+Change kern/syscall.c to sanity check arguments to system calls.
+
+Boot your kernel, running \lstinline|user/buggyhello|. The environment should be destroyed, and the kernel should not panic. You should see:
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+  [00001000] user_mem_check assertion failure for va 00000001
+  [00001000] free env 00001000
+  Destroyed the only environment - nothing more to do!
+\end{lstlisting}
+
+Finally, change \lstinline|debuginfo_eip| in \lstinline|kern/kdebug.c| to call \lstinline|user_mem_check| on \lstinline|usd|, \lstinline|stabs|, and \lstinline|stabstr|. If you now run user/breakpoint, you should be able to run \lstinline|backtrace| from the kernel monitor and see the backtrace traverse into \lstinline|lib/libmain.c| before the kernel panics with a page fault. What causes this page fault? You don't need to fix it, but you should understand why it happens.
+
+\end{framed}
+这个练习要求我们实现内存保护，也就是说，当用户程序出错时，比如访问了没有权限的内存，其他用户程序和操作系统都不能出错。
+首先，我们需要对page fault进行判断，如果是在Kernel mode下抛出了page fault，则说明操作系统发生了问题，需要\lstinline|panic|:
+\begin{lstlisting}[title=kern/trap.c]
+void
+page_fault_handler(struct Trapframe *tf)
+{
+	uint32_t fault_va;
+
+	// Read processor's CR2 register to find the faulting address
+	fault_va = rcr2();
+
+	// Handle kernel-mode page faults.
+
+	// LAB 3: Your code here.	
+	if ((tf->tf_cs & 3) != 3) {
+		// My hint: from comments in trap()
+		print_trapframe(tf);
+		panic("page_fault_handler: Kernel Page Fault");
+	}
+	...
+}
+\end{lstlisting}
+这里我们的判断可以借鉴\lstinline|trap(struct Trapframe *tf)|。
+
+然后我们要实现\lstinline|user_mem_check|检查函数，实现如下：
+\begin{lstlisting}[title=kern/pmap.c]
+int
+user_mem_check(struct Env *env, const void *va, size_t len, int perm)
+{
+	// LAB 3: Your code here.
+	pte_t* pte;
+	uint32_t beg = (uint32_t)va;
+	uint32_t end = (uint32_t)va + len;
+	uint32_t i = 0;
+	beg = ROUNDDOWN(beg, PGSIZE);
+	end = ROUNDUP(end, PGSIZE);
+	// Be careful about user_mem_check_addr!
+	for (i = 0; beg < end; beg += PGSIZE, i++) {
+		pte = pgdir_walk(env->env_pgdir, (void*)beg, 0);
+		if (beg >= ULIM || pte == NULL || ((*pte & perm) != perm)) {
+			user_mem_check_addr = i ? (uintptr_t)beg : (uintptr_t)va;
+			return -E_FAULT;
+		}
+	}
+
+	return 0;
+}
+\end{lstlisting}
+需要注意的第一个问题是，我们需要将\lstinline|va|和\lstinline|len|分别对齐，然后分别调用\lstinline|pgdir_walk|获取页表项。判断用户是否有权限访问内存时，先判断内存是否大于\lstinline|ULIM|，然后判断对应页是否存在，最后判断权限是否相符。
+
+还要注意的一点时，如果用户没有对虚拟地址\lstinline|va|的权限，那么直接返回\lstinline|va|就可以，不需要对齐。这是因为这个Lab的测试程序就是这样子的！
+\lstinline|buggyhello.c|中有\lstinline|sys_cputs((char*)1, 1);|，而测试的时候就直接判断是否输出为\lstinline|r.match('.00001000. user_mem_check assertion failure for va 00000001','.00001000. free env 00001000')|。
+
+然后,我们要在\lstinline|kern/syscall.c|中的系统调用函数中引入\lstinline|user_mem_check|。因为涉及到内存访问的系统调用只有\lstinline|sys_cputs()|函数一个，所以我们的实现如下:
+\begin{lstlisting}[title=kern/syscall.c]
+static void
+sys_cputs(const char *s, size_t len)
+{
+	// Check that the user has permission to read memory [s, s+len).
+	// Destroy the environment if not.
+
+	// LAB 3: Your code here.
+	user_mem_assert(curenv, (void*)s, len, PTE_U);
+	// Print the string supplied by the user.
+	cprintf("%.*s", len, s);
+}
+\end{lstlisting}
+
+最后，我们还要回到Lab 1的函数，在\lstinline|debuginfo_eip()|中进行权限检查：
+\begin{lstlisting}[title=kern/kdebug.c]
+int
+debuginfo_eip(uintptr_t addr, struct Eipdebuginfo *info) {
+	...
+		// Make sure this memory is valid.
+		// Return -1 if it is not.  Hint: Call user_mem_check.
+		// LAB 3: Your code here.
+		if (user_mem_check(curenv, usd, sizeof(struct UserStabData), PTE_U) < 0)
+			return -1;
+
+		stabs = usd->stabs;
+		stab_end = usd->stab_end;
+		stabstr = usd->stabstr;
+		stabstr_end = usd->stabstr_end;
+
+		// Make sure the STABS and string table memory is valid.
+		// LAB 3: Your code here.
+		if (user_mem_check(curenv, stabs, stab_end - stabs, PTE_U) < 0)
+			return -1;
+		if (user_mem_check(curenv, stabstr, stabstr_end - stabstr, PTE_U) < 0)
+			return -1;
+	...
+}
+\end{lstlisting}
+
+\begin{framed}
+\noindent\textbf{Exercise 10}
+  Boot your kernel, running \lstinline|user/evilhello|. The environment should be destroyed, and the kernel should not panic. You should see:
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+  [00000000] new env 00001000
+  [00001000] user_mem_check assertion failure for va f0100020
+  [00001000] free env 00001000
+\end{lstlisting}
+\end{framed}
+最后一个练习只是要我们检验一下是否能通过evilhello的测试，只要前面的代码都正确，这一步是不用修改任何代码的。
+
+测试结果如下:
+
+\begin{center}
+\includegraphics[scale=0.4]{lab3.grade.png}
+\end{center}
+
+\section{Question}
+\begin{framed}
+在\lstinline|user/hello.c|程序中调用了\lstinline|INT 0x30|，这是系统调用;\lstinline|user/divzero.c|触发了除零中断。请参考网页\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/INT.htm}中的内容，写出这两个\lstinline|INT|指令所做的具体工作，写出流程即可。
+\end{framed}
+
+首先，我们是在保护模式下的。所以先进入\lstinline|PROTECTED_MODE|。
+在\lstinline|PROTECTED_MODE|中，我们会进行合法性检查，比如检查中断向量必须在IDT里面，AR Byte(\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_05.htm})，也就是IDT Descriptor的12-8位是否合法。如果合法性不符和，则会触发General Protection异常(再次触发)。如果用户越权了（这是在\lstinline|user/hello.c|中的情况，也就是调用了软件中断），那么也会触发General Protection异常。如果对应的IDT项不存在，那么触发Not Present异常。合法性检查完成之后，我们来到\lstinline|TRAP-GATE-OR-INTERRUPT-GATE|。
+
+在\lstinline|TRAP-GATE-OR-INTERRUPT-GATE|中，我们也会进行合法性检查，比如Selector不能为空，必须在IDT Descriptor范围里面，AR Byte一定是Trap Gate或者Interrupt Gate，否则触发General Protection异常。然后我们检查CS是否是Non-conforming(允许从低权限到高权限），并且DPL是否小于CPL，如果条件满足，那么就跳到\lstinline|INTERRUPT-TO-INNER-PRIVILEGE|，我推测这是除零中断的情况，因为在用户态(CPL=3)执行了除法后，\lstinline|trap.c|中还是设置了DPL=0。如果条件不满足，我们跳到\lstinline|INTERRUPT-TO-SAME-PRIVILEGE-LEVEL|。
+
+在\lstinline|INTERRUPT-TO-INNER-PRIVILEGE|中，我们也还是先进行合法性检查，对于TSS的段结构，如果Selector为空，触发General Protection异常；如果Selector的索引超过了范围，触发Invalid TSS异常；如果Selector的RPL(Request Privilege Level)不等于CS的DPL，触发Invalid TSS异常；如果SS的DPL也不等于CS的DPL，触发Invalid TSS异常；如果DS不可写，也触发Invalid TSS异常；如果SS不存在，则触发Stack segment异常。后面就和\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_06.htm}说的一样了。SS, ESP, CS, EIP都被设为新的值，旧的值都压入TSS指向的栈。并且设置新的CPL，CS的RPL，清空TF，NT，设置IF等等。
+
+在\lstinline|INTERRUPT-TO-SAME-PRIVILEGE-LEVEL|中，情况也类似，与\url{http://pdos.csail.mit.edu/6.828/2012/readings/i386/s09_06.htm}大同小异。我们先进行一点合法性检查，比如有Error code时，要检查栈是否还能多压入两位，不然触发Stack segment异常；如果EIP不在CS里面，触发General Protection异常。这时候我们不需要设置新的SS和ESP了，只要更新CS, EIP, 将旧值压入栈，设置新的CPL，CS的RPL，清空TF，NT，设置IF就好了。
+
+\section{Challenges}
+\subsection{Challenge 1}
+\begin{framed}
+You probably have a lot of very similar code right now, between the lists of \lstinline|TRAPHANDLER| in \lstinline|trapentry.S| and their installations in \lstinline|trap.c|. Clean this up. Change the macros in \lstinline|trapentry.S| to automatically generate a table for \lstinline|trap.c| to use. Note that you can switch between laying down code and data in the assembler by using the directives \lstinline|.text| and \lstinline|.data|. 
+\end{framed}
+我们在Exercise 4里面就已经这样实现了。
+
+代码再贴一次：
+\begin{lstlisting}[title=trapentry.S]
+.data
+	.globl trap_handlers
+trap_handlers:
+    .long trhdlr0
+    .long trhdlr1
+    .long trhdlr2
+    .long trhdlr3
+    .long trhdlr4
+    .long trhdlr5
+    .long trhdlr6
+    .long trhdlr7
+    .long trhdlr8
+    .long trhdlr9
+    .long trhdlr10
+    .long trhdlr11
+    .long trhdlr12
+    .long trhdlr13
+    .long trhdlr14
+    .long trhdlr15
+    .long trhdlr16
+    .long trhdlr17
+    .long trhdlr18
+    .long trhdlr19
+    .long trhdlr20
+...
+
+.text
+
+/*
+ * Lab 3: Your code here for generating entry points for the different traps.
+ */
+/*
+ * http://pdos.csail.mit.edu/6.828/2010/readings/i386/s09_10.htm
+ */
+TRAPHANDLER_NOEC(trhdlr0, 0)
+TRAPHANDLER_NOEC(trhdlr1, 1)
+TRAPHANDLER_NOEC(trhdlr2, 2)
+TRAPHANDLER_NOEC(trhdlr3, 3)
+TRAPHANDLER_NOEC(trhdlr4, 4)
+TRAPHANDLER_NOEC(trhdlr5, 5)
+TRAPHANDLER_NOEC(trhdlr6, 6)
+TRAPHANDLER_NOEC(trhdlr7, 7)
+TRAPHANDLER(trhdlr8, 8)
+TRAPHANDLER_NOEC(trhdlr9, 9)
+TRAPHANDLER(trhdlr10, 10)
+TRAPHANDLER(trhdlr11, 11)
+TRAPHANDLER(trhdlr12, 12)
+TRAPHANDLER(trhdlr13, 13)
+TRAPHANDLER(trhdlr14, 14)
+TRAPHANDLER(trhdlr15, 15)
+TRAPHANDLER_NOEC(trhdlr16, 16)
+TRAPHANDLER(trhdlr17, 17)
+TRAPHANDLER_NOEC(trhdlr18, 18)
+TRAPHANDLER_NOEC(trhdlr19, 19)
+TRAPHANDLER_NOEC(trhdlr20, 20)
+...
+
+/*
+ * Lab 3: Your code here for _alltraps
+ */
+_alltraps:
+	pushw $0x0
+	pushw %ds
+	pushw $0x0
+	pushw %es
+	pushal
+
+	movw $GD_KD, %ax
+	movw %ax, %ds
+	movw %ax, %es
+
+	pushl %esp
+	call trap
+
+\end{lstlisting}
+注：我这里把0-255的中断和异常全部绑定了，由于篇幅有限，所以用省略号代替。
+\begin{lstlisting}[title=kern/trap.c]
+void
+trap_init(void)
+{
+
+	// LAB 3: Your code here.
+	extern uint32_t trap_handlers[];
+	uint32_t i;
+	// Init handlers
+	for (i = 0; i <= 255; i++)
+		SETGATE(idt[i], 0, GD_KT, trap_handlers[i], 0);
+	// Init breakpoint
+	SETGATE(idt[T_BRKPT], 0, GD_KT, trap_handlers[T_BRKPT], 3);
+	// Init syscall
+	SETGATE(idt[T_SYSCALL], 0, GD_KT, trap_handlers[T_SYSCALL], 3);
+
+	// Per-CPU setup 
+	trap_init_percpu();
+}
+\end{lstlisting}
+
+\subsection{Challenge 2}
+\begin{framed}
+Modify the JOS kernel monitor so that you can 'continue' execution from the current location (e.g., after the int3, if the kernel monitor was invoked via the breakpoint exception), and so that you can single-step one instruction at a time. You will need to understand certain bits of the \lstinline|EFLAGS| register in order to implement single-stepping.
+
+Optional: If you're feeling really adventurous, find some x86 disassembler source code - e.g., by ripping it out of QEMU, or out of GNU binutils, or just write it yourself - and extend the JOS kernel monitor to be able to disassemble and display instructions as you are stepping through them. Combined with the symbol table loading from lab 2, this is the stuff of which real kernel debuggers are made. 
+\end{framed}
+这个Challenge要求我们实现类似于gdb的功能，要求实现'continue'和'step'功能。
+对于continue，我们需要再次调用\lstinline|env_run|，并且需要将TF置为0，关闭调试中断。
+对于step，我们需要将TF置为1，开启调试中断。实现如下：
+\begin{lstlisting}[title=kern/monitor.c]
+static struct Command commands[] = {
+...
+	{ "c", "Continue process", mon_c },
+	{ "si", "Step", mon_si },
+};
+...
+int mon_c(int argc, char **argv, struct Trapframe *tf) {
+	extern struct Env* curenv;
+	if (tf == NULL || (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG)) {
+		cprintf("Invalid Trapframe\n");
+		return -1;
+	}
+	tf->tf_eflags &= ~FL_TF;
+	env_run(curenv);
+	return 0;
+}
+
+int mon_si(int argc, char **argv, struct Trapframe *tf) {
+	extern struct Env* curenv;
+	struct Eipdebuginfo info;
+	if (tf == NULL || (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG)) {
+		cprintf("Invalid Trapframe\n");
+		return -1;
+	}
+	debuginfo_eip(tf->tf_eip, &info);
+	cprintf("0x%08x %s:%d: %.*s+%d\n", tf->tf_eip, info.eip_file, info.eip_line, info.eip_fn_namelen, info.eip_fn_name, tf->tf_eip-info.eip_fn_addr);
+	tf->tf_eflags |= FL_TF;
+	env_run(curenv);
+	return 0;
+}
+\end{lstlisting}
+其中我们在step时模仿backtrace输出调试信息。
+
+我们还需要写一个自己的测试程序：
+\begin{lstlisting}[title=user/cha2.c]
+#include <inc/lib.h>
+void umain(int argc, char **argv) {
+	cprintf("before int 3\n");
+	asm volatile("int $3");
+	cprintf("after int3\n");
+}
+\end{lstlisting}
+还需要改一下Makefrag
+\begin{lstlisting}[title=kern/Makefrag]
+KERN_BINFILES :=	user/hello \
+			user/buggyhello \
+			user/buggyhello2 \
+			user/evilhello \
+			user/testbss \
+			user/divzero \
+			user/breakpoint \
+			user/softint \
+			user/badsegment \
+			user/faultread \
+			user/faultreadkernel \
+			user/faultwrite \
+			user/faultwritekernel \
+			user/cha2
+\end{lstlisting}
+
+运行结果如下：
+continue:
+\begin{center}
+\includegraphics[scale=0.4]{lab3.c.png}
+\end{center}
+
+\begin{center}
+\includegraphics[scale=0.4]{lab3.si.png}
+\end{center}
+
+\section{Tips}
+\begin{packed_enum}
+\item 汇编里面的操作数长度一定要看清！
+\item 参考的实验报告有很多结论是错的，一定要冷静分析。
+\item Trapframe本身就带有很多信息，调试的时候一定要多加利用！
+\end{packed_enum}
+
+\section{References}
+北京大学操作系统实习(实验班)报告, 黄睿哲.
+\end{document}
