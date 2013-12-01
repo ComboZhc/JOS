@@ -291,7 +291,13 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
-
+	int kstacktop_i;
+	int i;
+	for (i = 0; i < NCPU; ++i) { 
+		kstacktop_i = KSTACKTOP - i * (KSTKSIZE + KSTKGAP); 
+		boot_map_region(kern_pgdir, kstacktop_i - KSTKSIZE, KSTKSIZE, 
+			PADDR(percpu_kstacks[i]), PTE_W | PTE_P); 
+	}
 }
 
 // --------------------------------------------------------------
@@ -343,7 +349,8 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
-	size_t i, ext, cur, mp;
+	size_t i, iop, ext, cur, mp;
+	iop = PGNUM(IOPHYSMEM);
 	ext = PGNUM(EXTPHYSMEM);
 	cur = PGNUM(PADDR(boot_alloc(0)));
 	mp = PGNUM(MPENTRY_PADDR);
@@ -351,7 +358,7 @@ page_init(void)
 	for (i = 0; i < npages; i++) {
 		if (i == 0)
 			init_use_page(i);
-		else if (npages_basemem <= i && i < ext)
+		else if (iop <= i && i < ext)
 			init_use_page(i);
 		else if (ext <= i && i < cur)
 			init_use_page(i);
