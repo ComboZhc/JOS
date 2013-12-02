@@ -32,19 +32,18 @@ pgfault(struct UTrapframe *utf)
 	// Hint:
 	//   You should make three system calls.
 	//   No need to explicitly delete the old page's mapping.
-
 	// LAB 4: Your code here.
  	pte_t pte = uvpt[PGNUM((uint32_t)addr)];
+	addr = (void*)ROUNDDOWN((uint32_t)addr, PGSIZE);
 	if (!(err & FEC_WR))
 		panic("pgfault: the faulting access was not a write!");
 	if (!(pte & PTE_COW))
 		panic("pgfault: the faulting access was not to a copy-on-write page");
 	// Allocate a new page, map it at a temporary location (PFTEMP) 
-	if ((r = sys_page_alloc(0, (void *)PFTEMP, PTE_U | PTE_P | PTE_W)) < 0)
+	if ((r = sys_page_alloc(0, PFTEMP, PTE_U | PTE_P | PTE_W)) < 0)
 		panic("pgfault: sys_page_alloc: %e", r);
 	// copy the data from the old page to the new page
-	addr = (void*)ROUNDDOWN((uint32_t)addr, PGSIZE);
-	memmove((void*)PFTEMP, addr, PGSIZE);
+	memmove(PFTEMP, addr, PGSIZE);
 	// map new page it into the old page's address
 	// (this will implicitly unmap old page and decrease the physical page's "ref" by one.) 
 	if ((r = sys_page_map(0, PFTEMP, 0, addr, PTE_U | PTE_P | PTE_W)) < 0)
@@ -68,20 +67,30 @@ duppage(envid_t envid, unsigned pn)
 	int r;
 
 	// LAB 4: Your code here.
-	void *addr = (void *)(pn * PGSIZE);
-	pte_t pte = uvpt[pn];
-	if (!(pte & PTE_P) || !(pte & PTE_U))
-		return -E_INVAL;
-	if ((pte & PTE_W) || (pte & PTE_COW)) {
-		// Issues in Ruizhe's implementation: missing other PTE bits
-		if ((r = sys_page_map(0, addr, envid, addr, PTE_U | PTE_P | PTE_COW)) < 0)
-			panic("duppage: sys_page_map: %e", r);
-		if ((r = sys_page_map(0, addr, 0, addr, PTE_U | PTE_P | PTE_COW)) < 0)
-			panic("duppage: sys_page_map: %e", r);
-	} else {
-		if ((r = sys_page_map(0, addr, envid, addr, PGOFF(pte))) < 0)
-			panic("duppage: sys_page_map: %e", r);
-	}
+	void *addr = (void *)(pn);
+	// This is NOT what you should do in your fork.
+	if ((r = sys_page_alloc(envid, addr, PTE_P|PTE_U|PTE_W)) < 0)
+		panic("sys_page_alloc: %e", r);
+	if ((r = sys_page_map(envid, addr, 0, PFTEMP, PTE_P|PTE_U|PTE_W)) < 0)
+		panic("sys_page_map: %e", r);
+	memmove(PFTEMP, addr, PGSIZE);
+	if ((r = sys_page_unmap(0, PFTEMP)) < 0)
+		panic("sys_page_unmap: %e", r);
+
+	// pte_t pte = uvpt[PGNUM(pn)];
+
+	// if (!(pte & PTE_P) || !(pte & PTE_U))
+	// 	return -E_INVAL;
+	// if ((pte & PTE_W) || (pte & PTE_COW)) {
+	// 	// Issues in Ruizhe's implementation: missing other PTE bits
+	// 	if ((r = sys_page_map(0, addr, envid, addr, PTE_U | PTE_P | PTE_COW)) < 0)
+	// 		panic("duppage: sys_page_map: %e", r);
+	// 	if ((r = sys_page_map(0, addr, 0, addr, PTE_U | PTE_P | PTE_COW)) < 0)
+	// 		panic("duppage: sys_page_map: %e", r);
+	// } else {
+	// 	if ((r = sys_page_map(0, addr, envid, addr, PGOFF(pte))) < 0)
+	// 		panic("duppage: sys_page_map: %e", r);
+	// }
 	return 0;
 }
 
@@ -106,7 +115,7 @@ fork(void)
 {
 	// LAB 4: Your code here.
 	envid_t envid;
-	uint32_t addr;
+	uint8_t *addr;
 	int r;
 	extern void _pgfault_upcall(); 
 
@@ -117,11 +126,9 @@ fork(void)
 		thisenv = &envs[ENVX(sys_getenvid())];
 		return 0;
 	}
-	for (addr = 0; addr < UXSTACKTOP - PGSIZE; addr += PGSIZE) {
-		if (addr > 0xeebfdf00)
-			cprintf("0x%x\n", addr);
-		if ((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_U))
-			duppage(envid, PGNUM(addr));
+	for (addr = 0; addr < (uint8_t*)(UXSTACKTOP - PGSIZE); addr += PGSIZE) {
+		if ((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P))
+			duppage(envid, (unsigned)addr);
 	}
 	if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)) < 0)
 		panic("fork: sys_env_set_pgfault_upcall: %e", r);
