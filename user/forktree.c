@@ -13,8 +13,8 @@ forkchild(const char *cur, char branch)
 
 	if (strlen(cur) >= DEPTH)
 		return;
-
 	snprintf(nxt, DEPTH+1, "%s%c", cur, branch);
+	cprintf("%04x << 0x%x\n", sys_getenvid(), nxt);
 	if (fork() == 0) {
 		forktree(nxt);
 		exit();
