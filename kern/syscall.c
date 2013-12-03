@@ -366,6 +366,25 @@ sys_ipc_recv(void *dstva)
 	return 0;
 }
 
+static int
+sys_env_set_priority(envid_t envid, uint32_t priority) {
+	struct Env *env; 
+	int r; 
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r; 
+	env->env_priority = priority; 
+	return 0;
+}
+
+static int
+sys_env_get_runs(envid_t envid) {
+	struct Env *env; 
+	int r; 
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r; 
+	return env->env_runs;
+}
+
 // Dispatches to the correct kernel function, passing the arguments.
 int32_t
 syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
@@ -379,42 +398,36 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 			sys_cputs((const char*)a1, (size_t)a2);
 			return 0;
 		case SYS_cgetc:
-			r = sys_cgetc();
-			return r;
+			return sys_cgetc();
 		case SYS_getenvid:
-			r = sys_getenvid();
-			return r;
+			return sys_getenvid();
 		case SYS_env_destroy:
-			r = sys_env_destroy((envid_t)a1);
-			return r;
+			return sys_env_destroy((envid_t)a1);
 		case SYS_yield:
 			sys_yield();
 			return 0;
 		case SYS_exofork:
-			r = sys_exofork();
-			return r;
+			return sys_exofork();
 		case SYS_env_set_status:
-			r = sys_env_set_status((envid_t)a1, (int)a2);
-			return r;
+			return sys_env_set_status((envid_t)a1, (int)a2);
 		case SYS_page_alloc:
-			r = sys_page_alloc((envid_t)a1, (void *)a2, (int)a3);
-			return r;
+			return sys_page_alloc((envid_t)a1, (void *)a2, (int)a3);
 		case SYS_page_map:
-			r = sys_page_map((envid_t)a1, (void *)a2, (envid_t)a3, (void *)a4, (int)a5);
-			return r; 
+			return sys_page_map((envid_t)a1, (void *)a2, (envid_t)a3, (void *)a4, (int)a5);
 		case SYS_page_unmap: 
-			r = sys_page_unmap((envid_t)a1, (void *)a2); 
-			return r;
+			return sys_page_unmap((envid_t)a1, (void *)a2); 
 		// Exercise 11
         case SYS_env_set_pgfault_upcall:
-            r = sys_env_set_pgfault_upcall(a1, (void *) a2);
-            return r;
+            return sys_env_set_pgfault_upcall(a1, (void *) a2);
         case SYS_ipc_try_send:
-            r = sys_ipc_try_send(a1, a2, (void *)a3, a4);
-            return r;
+            return sys_ipc_try_send(a1, a2, (void *)a3, a4);
         case SYS_ipc_recv:
-            r = sys_ipc_recv((void *)a1);
-            return r;
+            return sys_ipc_recv((void *)a1);
+        // Lab 4 Challenge 2
+        case SYS_env_set_priority:
+        	return sys_env_set_priority((envid_t)a1, (uint32_t)a2);
+        case SYS_env_get_runs:
+        	return sys_env_get_runs((envid_t)a1);
 		default:
 			return -E_INVAL;
 	}
