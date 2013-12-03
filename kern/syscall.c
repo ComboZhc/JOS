@@ -322,15 +322,15 @@ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
         return -E_BAD_ENV;
     if (!e->env_ipc_recving)
         return -E_IPC_NOT_RECV;
-    if ((uint32_t) srcva < UTOP && (uint32_t) srcva % PGSIZE)
+    if ((uint32_t) srcva < UTOP && ROUNDDOWN(srcva, PGSIZE) != srcva)
         return -E_INVAL;
     if ((uint32_t) srcva < UTOP && (!(perm & PTE_U) || !(perm & PTE_P) || (perm & ~PTE_SYSCALL))) 
         return -E_INVAL;
 	if ((uint32_t) srcva < UTOP && (page = page_lookup(curenv->env_pgdir, srcva, &pte)) == NULL)
 		return -E_INVAL;
-	if ((perm & PTE_W) && !(*pte & PTE_W)) 
+	if ((uint32_t) srcva < UTOP && (perm & PTE_W) && !(*pte & PTE_W)) 
         return -E_INVAL;
-	if (page_insert(e->env_pgdir, page, e->env_ipc_dstva, perm))
+	if ((uint32_t) srcva < UTOP && page_insert(e->env_pgdir, page, e->env_ipc_dstva, perm))
         return -E_NO_MEM;
 	e->env_ipc_perm = perm;
     e->env_ipc_recving = 0;
@@ -356,7 +356,7 @@ static int
 sys_ipc_recv(void *dstva)
 {
 	// LAB 4: Your code here.
-    if ((uint32_t) dstva < UTOP && (uint32_t) dstva % PGSIZE)
+    if ((uint32_t) dstva < UTOP && ROUNDDOWN(dstva, PGSIZE) != dstva)
         return -E_INVAL;
 	curenv->env_ipc_recving = 1;
     curenv->env_ipc_dstva = dstva;

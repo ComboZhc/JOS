@@ -126,7 +126,7 @@ trap_init_percpu(void)
 
 	// Load the TSS selector (like other segment selectors, the
 	// bottom three bits are special; we leave them 0)
-	ltr(GD_TSS0 + (i << 3));
+	ltr((GD_TSS0 + (i << 3)) & ~0x7);
 
 	// Load the IDT
 	lidt(&idt_pd);
@@ -224,8 +224,6 @@ trap_dispatch(struct Trapframe *tf)
 			tf->tf_regs.reg_ebx,
 			tf->tf_regs.reg_edi,
 			tf->tf_regs.reg_esi);
-		if (r < 0)
-			panic("trap_dispatch: %d %e\n", tf->tf_regs.reg_eax, r);
 		tf->tf_regs.reg_eax = r;
 		return;
 	}

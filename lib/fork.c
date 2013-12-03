@@ -25,6 +25,12 @@ pgfault(struct UTrapframe *utf)
 	//   (see <inc/memlayout.h>).
 
 	// LAB 4: Your code here.
+ 	pte_t pte = uvpt[PGNUM((uint32_t)addr)];
+	addr = (void*)ROUNDDOWN((uint32_t)addr, PGSIZE);
+	if (!(err & FEC_WR))
+		panic("pgfault: the faulting access was not a write!");
+	if (!(pte & PTE_COW))
+		panic("pgfault: the faulting access was not to a copy-on-write page");
 
 	// Allocate a new page, map it at a temporary location (PFTEMP),
 	// copy the data from the old page to the new page, then move the new
@@ -33,19 +39,9 @@ pgfault(struct UTrapframe *utf)
 	//   You should make three system calls.
 	//   No need to explicitly delete the old page's mapping.
 	// LAB 4: Your code here.
- 	pte_t pte = uvpt[PGNUM((uint32_t)addr)];
-	addr = (void*)ROUNDDOWN((uint32_t)addr, PGSIZE);
-	if (!(err & FEC_WR))
-		panic("pgfault: the faulting access was not a write!");
-	if (!(pte & PTE_COW))
-		panic("pgfault: the faulting access was not to a copy-on-write page");
-	// Allocate a new page, map it at a temporary location (PFTEMP) 
 	if ((r = sys_page_alloc(0, PFTEMP, PTE_U | PTE_P | PTE_W)) < 0)
 		panic("pgfault: sys_page_alloc: %e", r);
-	// copy the data from the old page to the new page
-	memmove(PFTEMP, addr, PGSIZE);
-	// map new page it into the old page's address
-	// (this will implicitly unmap old page and decrease the physical page's "ref" by one.) 
+	memmove(PFTEMP, addr, PGSIZE); 
 	if ((r = sys_page_map(0, PFTEMP, 0, addr, PTE_U | PTE_P | PTE_W)) < 0)
 		panic("pgfault: sys_page_map: %e", r);
 }
