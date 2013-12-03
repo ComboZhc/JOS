@@ -16,6 +16,7 @@
 #include <kern/spinlock.h>
 
 struct Env *envs = NULL;		// All environments
+bool env_priority_enabled = 0; // Lab 4 Challenge 2
 static struct Env *env_free_list;	// Free environment list
 					// (linked by Env->env_link)
 

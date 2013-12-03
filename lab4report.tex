@@ -1,0 +1,229 @@
+\documentclass[11pt]{article}
+\usepackage[top=1in, bottom=1in, left=1.25in, right=1.25in]{geometry}
+\usepackage[BoldFont,SlantFont,CJKsetspaces,CJKchecksingle]{xeCJK}
+\usepackage{framed}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{hyperref}
+\setCJKmainfont[BoldFont=SimHei]{SimSun}
+\setCJKmonofont{SimSun}
+\usepackage{graphicx}
+\usepackage{color}
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+\lstset{ %
+  backgroundcolor=\color{white},
+  basicstyle=\ttfamily,
+  breakatwhitespace=false,
+  breaklines=true,
+  captionpos=t,
+  commentstyle=\color{mygreen},
+  columns=flexible,
+  deletekeywords={...},
+  escapeinside={\%*}{*)},
+  extendedchars=true,
+  frame=single,
+  keepspaces=true,
+  keywordstyle=\color{blue},
+  language=C,
+  morekeywords={*,...},
+  numbers=none,
+  rulecolor=\color{black},
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  stepnumber=1,
+  stringstyle=\color{mymauve},
+  tabsize=2,
+  title=\lstname
+}
+\newenvironment{packed_enum}{
+\begin{enumerate}
+  \setlength{\itemsep}{1pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{enumerate}}
+\parindent 2em
+
+\begin{document}
+\title{\textbf{\huge{实验报告 Lab4}}\\
+10300240039 章超}
+\maketitle
+\section{Multiprocessor Support and Cooperative Multitasking}
+
+\subsection{Multiprocessor Support}
+
+\begin{framed}
+\noindent\textbf{Exercise 1} Implement \lstinline|mmio_map_region| in \lstinline|kern/pmap.c|. To see how this is used, look at the beginning of \lstinline|lapic_init| in \lstinline|kern/lapic.c|. You'll have to do the next exercise, too, before the tests for \lstinline|mmio_map_region| will run.
+\end{framed}
+
+\subsection{Application Processor Bootstrap}
+\begin{framed}
+\noindent\textbf{Exercise 2} Read \lstinline|boot_aps()| and \lstinline|mp_main()| in \lstinline|kern/init.c|, and the assembly code in \lstinline|kern/mpentry.S|. Make sure you understand the control flow transfer during the bootstrap of APs. Then modify your implementation of \lstinline|page_init()| in \lstinline|kern/pmap.c| to avoid adding the page at \lstinline|MPENTRY_PADDR| to the free list, so that we can safely copy and run AP bootstrap code at that physical address. Your code should pass the updated \lstinline|check_page_free_list()| test (but might fail the updated \lstinline|check_kern_pgdir()| test, which we will fix soon).
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question 1} Compare \lstinline|kern/mpentry.S| side by side with \lstinline|boot/boot.S|. Bearing in mind that \lstinline|kern/mpentry.S| is compiled and linked to run above \lstinline|KERNBASE| just like everything else in the kernel, what is the purpose of macro \lstinline|MPBOOTPHYS|? Why is it necessary in \lstinline|kern/mpentry.S| but not in \lstinline|boot/boot.S|? In other words, what could go wrong if it were omitted in \lstinline|kern/mpentry.S|? 
+Hint: recall the differences between the link address and the load address that we have discussed in Lab 1.
+\end{framed}
+
+\subsubsection{Per-CPU State and Initialization}
+\begin{framed}
+\noindent\textbf{Exercise 3} Modify \lstinline|mem_init_mp()| (in \lstinline|kern/pmap.c|) to map per-CPU stacks starting at \lstinline|KSTACKTOP|, as shown in \lstinline|inc/memlayout.h|. The size of each stack is \lstinline|KSTKSIZE| bytes plus \lstinline|KSTKGAP| bytes of unmapped guard pages. Your code should pass the new check in \lstinline|check_kern_pgdir()|.
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Exercise 4} The code in \lstinline|trap_init_percpu()| (\lstinline|kern/trap.c|) initializes the TSS and TSS descriptor for the BSP. It worked in Lab 3, but is incorrect when running on other CPUs. Change the code so that it can work on all CPUs. (Note: your new code should not use the global ts variable any more.)
+\end{framed}
+
+\subsection{Locking}
+\begin{framed}
+\noindent\textbf{Exercise 5} Apply the big kernel lock as described above, by calling \lstinline|lock_kernel()| and \lstinline|unlock_kernel()| at the proper locations.
+\end{framed}
+\begin{framed}
+\noindent\textbf{Question 2} It seems that using the big kernel lock guarantees that only one CPU can run the kernel code at a time. Why do we still need separate kernel stacks for each CPU? Describe a scenario in which using a shared kernel stack will go wrong, even with the protection of the big kernel lock.
+\end{framed}
+
+\subsection{Round-Robin Scheduling}
+\begin{framed}
+\noindent\textbf{Exercise 6} Implement round-robin scheduling in \lstinline|sched_yield()| as described above. Don't forget to modify \lstinline|syscall()| to dispatch \lstinline|sys_yield()|.
+
+Modify \lstinline|kern/init.c| to create three (or more!) environments that all run the program \lstinline|user/yield.c|. You should see the environments switch back and forth between each other five times before terminating, like this:
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+...
+Hello, I am environment 00001000.
+Hello, I am environment 00001001.
+Hello, I am environment 00001002.
+Back in environment 00001000, iteration 0.
+Back in environment 00001001, iteration 0.
+Back in environment 00001002, iteration 0.
+Back in environment 00001000, iteration 1.
+Back in environment 00001001, iteration 1.
+Back in environment 00001002, iteration 1.
+...
+\end{lstlisting}
+
+After the \lstinline|yield| programs exit, there will be no runnable environment in the system, the scheduler should invoke the JOS kernel monitor. If any of this does not happen, then fix your code before proceeding.
+\end{framed}
+
+\subsection{The Breakpoint Exception}
+\begin{framed}
+\noindent\textbf{Exercise 6} Modify \lstinline|trap_dispatch()| to make breakpoint exceptions invoke the kernel monitor. You should now be able to get make grade to succeed on the breakpoint test. 
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question 3} In your implementation of \lstinline|env_run()| you should have called \lstinline|lcr3()|. Before and after the call to \lstinline|lcr3()|, your code makes references (at least it should) to the variable \lstinline|e|, the argument to \lstinline|env_run|. Upon loading the \lstinline|%cr3| register, the addressing context used by the MMU is instantly changed. But a virtual address (namely \lstinline|e|) has meaning relative to a given address context--the address context specifies the physical address to which the virtual address maps. Why can the pointer \lstinline|e| be dereferenced both before and after the addressing switch?
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question 4} Whenever the kernel switches from one environment to another, it must ensure the old environment's registers are saved so they can be restored properly later. Why? Where does this happen?
+\end{framed}
+
+\subsection{System Calls for Environment Creation}
+\begin{framed}
+\noindent\textbf{Exercise 7} Implement the system calls described above in \lstinline|kern/syscall.c|. You will need to use various functions in \lstinline|kern/pmap.c| and \lstinline|kern/env.c|, particularly \lstinline|envid2env()|. For now, whenever you call \lstinline|envid2env()|, pass 1 in the \lstinline|checkperm| parameter. Be sure you check for any invalid system call arguments, returning \lstinline|-E_INVAL| in that case. Test your JOS kernel with \lstinline|user/dumbfork| and make sure it works before proceeding.
+\end{framed}
+
+\section{Copy-on-Write Fork}
+
+\subsection{User-level page fault handling}
+\subsubsection{Setting the Page Fault Handler}
+\begin{framed}
+\noindent\textbf{Exercise 8} Implement the \lstinline|sys_env_set_pgfault_upcall| system call. Be sure to enable permission checking when looking up the environment ID of the target environment, since this is a "dangerous" system call.
+\end{framed}Clock Interrupts and Preemption
+\subsubsection{Normal and Exception Stacks in User Environments}
+\subsubsection{Invoking the User Page Fault Handler}
+\begin{framed}
+\noindent\textbf{Exercise 9} Implement the \lstinline|sys_env_set_pgfault_upcall| system call. Be sure to enable permission checking when looking up the environment ID of the target environment, since this is a "dangerous" system call.
+\end{framed}
+\subsubsection{User-mode Page Fault Entrypoint}
+\begin{framed}
+\noindent\textbf{Exercise 10} Implement the \lstinline|_pgfault_upcall| routine in \lstinline|lib/pfentry.S|. The interesting part is returning to the original point in the user code that caused the page fault. You'll return directly there, without going back through the kernel. The hard part is simultaneously switching stacks and re-loading the EIP.
+\end{framed}
+\begin{framed}
+\noindent\textbf{Exercise 11} Finish \lstinline|set_pgfault_handler()| in \lstinline|lib/pgfault.c|.
+\end{framed}
+\subsection{Implementing Copy-on-Write Fork}
+\begin{framed}
+\noindent\textbf{Exercise 12} Implement \lstinline|fork|, \lstinline|duppage| and \lstinline|pgfault| in \lstinline|lib/fork.c|.
+
+Test your code with the forktree program. It should produce the following messages, with interspersed 'new env', 'free env', and 'exiting gracefully' messages. The messages may not appear in this order, and the environment IDs may be different.
+
+\begin{lstlisting}[aboveskip=-1.5em,frame=none]
+	1000: I am ''
+	1001: I am '0'
+	2000: I am '00'
+	2001: I am '000'
+	1002: I am '1'
+	3000: I am '11'
+	3001: I am '10'
+	4000: I am '100'
+	1003: I am '01'
+	5000: I am '010'
+	4001: I am '011'
+	2002: I am '110'
+	1004: I am '001'
+	1005: I am '111'
+	1006: I am '101'
+\end{lstlisting}
+\end{framed}
+\section{Preemptive Multitasking and Inter-Process communication (IPC)}
+\subsection{Clock Interrupts and Preemption}
+\subsubsection{Interrupt discipline}
+\begin{framed}
+\noindent\textbf{Exercise 13} Modify \lstinline|kern/trapentry.S| and \lstinline|kern/trap.c| to initialize the appropriate entries in the IDT and provide handlers for IRQs 0 through 15. Then modify the code in \lstinline|env_alloc()| in \lstinline|kern/env.c| to ensure that user environments are always run with interrupts enabled.
+
+The processor never pushes an error code or checks the Descriptor Privilege Level (DPL) of the IDT entry when invoking a hardware interrupt handler. You might want to re-read section 9.2 of the 80386 Reference Manual, or section 5.8 of the IA-32 Intel Architecture Software Developer's Manual, Volume 3, at this time.
+
+After doing this exercise, if you run your kernel with any test program that runs for a non-trivial length of time (e.g., \lstinline|spin|), you should see the kernel print trap frames for hardware interrupts. While interrupts are now enabled in the processor, JOS isn't yet handling them, so you should see it misattribute each interrupt to the currently running user environment and destroy it. Eventually it should run out of environments to destroy and drop into the monitor.
+\end{framed}
+\subsubsection{Handling Clock Interrupts}
+\begin{framed}
+\noindent\textbf{Exercise 14} Modify the kernel's \lstinline|trap_dispatch()| function so that it calls \lstinline|sched_yield()| to find and run a different environment whenever a clock interrupt takes place.
+
+You should now be able to get the \lstinline|user/spin| test to work: the parent environment should fork off the child, \lstinline|sys_yield()| to it a couple times but in each case regain control of the CPU after one time slice, and finally kill the child environment and terminate gracefully.
+\end{framed}
+\subsection{Inter-Process communication (IPC)}
+\subsubsection{IPC in JOS}
+\subsubsection{Sending and Receiving Messages}
+\subsubsection{Transferring Pages}
+\subsubsection{Implementing IPC}
+\begin{framed}
+\noindent\textbf{Exercise 15} Implement \lstinline|sys_ipc_recv| and \lstinline|sys_ipc_try_send| in \lstinline|kern/syscall.c|. Read the comments on both before implementing them, since they have to work together. When you call \lstinline|envid2env| in these routines, you should set the checkperm flag to 0, meaning that any environment is allowed to send IPC messages to any other environment, and the kernel does no special permission checking other than verifying that the target envid is valid.
+
+Then implement the \lstinline|ipc_recv| and \lstinline|ipc_send| functions in \lstinline|lib/ipc.c|.
+
+Use the \lstinline|user/pingpong| and \lstinline|user/primes| functions to test your IPC mechanism. You might find it interesting to read \lstinline|user/primes.c| to see all the forking and IPC going on behind the scenes.
+\end{framed}
+
+\begin{center}
+\includegraphics[scale=0.25]{lab4.grade.png}
+\end{center}
+
+\section{Challenges}
+
+\subsection{Challenge 2}
+\begin{framed}
+Challenge! Add a less trivial scheduling policy to the kernel, such as a fixed-priority scheduler that allows each environment to be assigned a priority and ensures that higher-priority environments are always chosen in preference to lower-priority environments. If you're feeling really adventurous, try implementing a Unix-style adjustable-priority scheduler or even a lottery or stride scheduler. (Look up "lottery scheduling" and "stride scheduling" in Google.)
+
+Write a test program or two that verifies that your scheduling algorithm is working correctly (i.e., the right environments get run in the right order). It may be easier to write these test programs once you have implemented \lstinline|fork()| and IPC in parts B and C of this lab.
+\end{framed}
+
+运行结果如下：
+\begin{center}
+\includegraphics[scale=0.25]{lab4.cha2.png}
+\end{center}
+
+\section{Tips}
+\begin{packed_enum}
+\item Kernel调试信息可以用warn输出，User Mode则要用cprintf
+\item Regression Test很重要！Ex15就犯了这个错误！
+\item GDB调试基本上是不会有帮助的
+\item 参考的实验报告有很多结论是错的，一定要冷静分析。
+\end{packed_enum}
+
+\section{References}
+北京大学操作系统实习(实验班)报告, 黄睿哲.
+\end{document}

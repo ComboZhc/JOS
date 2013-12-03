@@ -33,17 +33,28 @@ sched_yield(void)
 	uint32_t min_runs = 0xffffffff;
 	int min_choice = -1;
 	if (thiscpu->cpu_env) {
-		for (i = 0; i < NENV; i++)
-			if (envs[i].env_status == ENV_RUNNABLE) {
-				if ((envs[i].env_runs >> envs[i].env_priority) < min_runs) {
-					min_runs = envs[i].env_runs >> envs[i].env_priority;
-					min_choice = i;
+		if (env_priority_enabled) {
+			for (i = 0; i < NENV; i++)
+				if (envs[i].env_status == ENV_RUNNABLE) {
+					if ((envs[i].env_runs >> envs[i].env_priority) < min_runs) {
+						min_runs = envs[i].env_runs >> envs[i].env_priority;
+						min_choice = i;
+					}
 				}
-			}
-		if (min_choice != -1)
-			env_run(&envs[min_choice]);
-		if (thiscpu->cpu_env->env_status == ENV_RUNNING)
-			env_run(thiscpu->cpu_env);
+			if (min_choice != -1)
+				env_run(&envs[min_choice]);
+			if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+				env_run(thiscpu->cpu_env);
+		} else {
+			int cur_id = ENVX(thiscpu->cpu_env->env_id);
+			for (i = (cur_id + 1) % NENV; i != cur_id; i = (i + 1) % NENV)
+				if (envs[i].env_status == ENV_RUNNABLE)
+					break;
+			if (i != cur_id)
+				env_run(&envs[i]);
+			if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+				env_run(thiscpu->cpu_env);
+		}
 	} else {
 		for (i = 0; i < NENV; i++)
 			if (envs[i].env_status == ENV_RUNNABLE)

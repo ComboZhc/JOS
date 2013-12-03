@@ -385,6 +385,12 @@ sys_env_get_runs(envid_t envid) {
 	return env->env_runs;
 }
 
+static int
+sys_env_enable_priority(bool enabled) {
+	env_priority_enabled = enabled;
+	return 0;
+}
+
 // Dispatches to the correct kernel function, passing the arguments.
 int32_t
 syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
@@ -428,6 +434,8 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
         	return sys_env_set_priority((envid_t)a1, (uint32_t)a2);
         case SYS_env_get_runs:
         	return sys_env_get_runs((envid_t)a1);
+        case SYS_env_enable_priority:
+        	return sys_env_enable_priority((bool)a1);
 		default:
 			return -E_INVAL;
 	}

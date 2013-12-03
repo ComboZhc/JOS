@@ -18,6 +18,7 @@ enum {
 	SYS_ipc_recv,
 	SYS_env_set_priority,
 	SYS_env_get_runs,
+	SYS_env_enable_priority,
 	NSYSCALLS
 };
 
