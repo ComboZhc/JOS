@@ -51,39 +51,241 @@
 10300240039 章超}
 \maketitle
 \section{Multiprocessor Support and Cooperative Multitasking}
-
+第一部分，我们首先要使JOS拓展称为多处理器的系统，然后实现新的系统调用，从而使用户可以创建进程（JOS的Enviroment），进程调度将使用round-robin轮转式调度，在第三部分中再实现抢占式调度。
 \subsection{Multiprocessor Support}
+JOS采用的是SMP(Symmetric Multi-Processing)模型：每一个 CPU 对系统资源具有同等的访问能力。CPU可以分为两类，一类是BSP(BootStrap Processor)，也就是启动系统的那个处理器，到现在为止，也就是Lab1到Lab3，我们的所有代码都是在BSP上运行的，启动时的BSP，是由硬件和BIOS决定的；另一类是AP(Application Processor)，这些都是由BSP激活，然后和BSP一起同等工作的。
+
+在SMP中，每个CPU有一个LAPIC(Local APIC)单元。LAPIC单元的作用包括在系统传递中断信号，提供CPU标识符。Lab4中在下面这几个地方会涉及LAPIC单元： 
+\begin{itemize}
+\item 读取LAPIC标识符(APIC ID)，知道运行当前代码的CPU(\lstinline|cpunum()|)
+\item BSP发送CPU间中断\lstinline|STARTUP|来激活AP(\lstinline|lapic_startap()|)
+\item 在抢占式调度中，我们对LAPIC 内部的计时器进行编程(\lstinline|apic_init()|)
+\end{itemize}
+这些函数都实现好了，我们只要看懂大概意思就行了。
+
+LAPIC还采用了MMIO(Memory-mapped I/O)技术，一部分物理内存硬连接到 IO 设备的寄存器上。我们其实已经将0xA0000的物理地址代表的I/O Hole作为CGA的输出Buffer了。而LAPIC硬链接到物理内存的0xFE000000(LAPIC Hole)，此处离4GB仅有剩32MB，物理地址太高了，KERNBASE处的直接映射已经不可能了。所以我们要建立它的内存映射。
 
 \begin{framed}
 \noindent\textbf{Exercise 1} Implement \lstinline|mmio_map_region| in \lstinline|kern/pmap.c|. To see how this is used, look at the beginning of \lstinline|lapic_init| in \lstinline|kern/lapic.c|. You'll have to do the next exercise, too, before the tests for \lstinline|mmio_map_region| will run.
 \end{framed}
 
+\lstinline|lapic_init|中为LAPIC分配了一页。（这里用PGSIZE要比直接用4096硬编码要好）。
+\begin{lstlisting}[title=kern/lapic.c]
+	lapic = mmio_map_region(lapicaddr, 4096);
+\end{lstlisting}
+
+我们对于\lstinline|mmio_map_region|的实现如下：
+\begin{lstlisting}[title=kern/pmap.c]
+void *
+mmio_map_region(physaddr_t pa, size_t size)
+{
+	static uintptr_t base = MMIOBASE;
+	size = ROUNDUP(size, PGSIZE);
+	if (base + size > MMIOLIM)
+		panic("mmio_map_region: Out of memory size");
+	boot_map_region(kern_pgdir, base, size, pa, PTE_W | PTE_PCD | PTE_PWT);
+	void *ret = (void*)base;
+	base += size;
+	return ret;
+}
+\end{lstlisting}
+这里需要将\lstinline|base|更新，以便后续可以继续分配（实际上Lab4里面就没有后续分配了）。然后按照注释提示，调用\lstinline|boot_map_region|就可以了。唯一需要注意的就是要将权限设为Cache-disable和Write-through，这样在这部分虚拟空间上的操作就会立即生效。
+
 \subsection{Application Processor Bootstrap}
+在AP跑起来之前，BSP 会事先从 BIOS 搜集一些系统多处理器的信息，例如CPU的个数，它们的APIC ID，LAPIC单元的MIMO地址。参见\lstinline|kern/mpconfig.c|中的\lstinline|mp_init()|函数。 
+\lstinline|kern/init.c|中的\lstinline|boot_aps()|函数激活AP，AP也是从实模式开始运行。所以需要将AP的入口代码(\lstinline|kern/mpentry.S|)复制到内存中实模式可以寻址的位置，这里是0x7000(\lstinline|MPENTRY_PADDR|)。
+现在，\lstinline|boot_aps()|函数将AP依次激活：它向AP的LAPIC发送\lstinline|STARTUP|中断，以及起始的\lstinline|CS:IP|地址\lstinline|MPENTRY_PADDR|. AP 的起始代码在\lstinline|kern/mpentry.S|中，这和我们在\lstinline|boot/boot.S|中看到的代码非常相似。在完成一些初始操作以后，AP开启分页，进入保护模式，然后调用\lstinline|mp_main()|函数。这时，BSP的\lstinline|boot_aps()|函数等待来自被激活AP的\lstinline|CPU_STARTED|信号，然后才激活下一个AP。 
+
 \begin{framed}
 \noindent\textbf{Exercise 2} Read \lstinline|boot_aps()| and \lstinline|mp_main()| in \lstinline|kern/init.c|, and the assembly code in \lstinline|kern/mpentry.S|. Make sure you understand the control flow transfer during the bootstrap of APs. Then modify your implementation of \lstinline|page_init()| in \lstinline|kern/pmap.c| to avoid adding the page at \lstinline|MPENTRY_PADDR| to the free list, so that we can safely copy and run AP bootstrap code at that physical address. Your code should pass the updated \lstinline|check_page_free_list()| test (but might fail the updated \lstinline|check_kern_pgdir()| test, which we will fix soon).
 \end{framed}
+这个练习要求我们阅读\lstinline|kern/init.c|中的\lstinline|boot_aps()|，\lstinline|mp_main()|函数，以及\lstinline|kern/mpentry.S|中的汇编代码。然后在\lstinline|kern/pmap.c|的\lstinline|page_init()|添加一些代码，使AP启动代码的物理内存区域(\lstinline|MPENTRY_PADDR|)避免被加入空闲页框链表。
 
+首先，\lstinline|kern/init.c|中的\lstinline|boot_aps()|函数。这个函数是被BSP调用，首先将代码拷贝到\lstinline|MPENTRY_PADDR|，然后依次启动CPU，设置他们的栈，调用\lstinline|lapic_start|并等待\lstinline|CPU_STARTED|信号。
+其次，\lstinline|kern/mpentry.S|中的汇编代码。这与\lstinline|boot/boot.S|几乎一样，区别是一个没有开启A20，另一个是用\lstinline|MPBOOTPHYS|来计算符号的地址。这里面有一个问题，
+\begin{lstlisting}[title=kern/mpentry.S]
+	# Call mp_main().  (Exercise for the reader: why the indirect call?)
+	movl    $mp_main, %eax
+	call    *%eax
+\end{lstlisting}
+网上搜索了好久，都没有找到答案，照理来说\lstinline|%eax|也不会在函数中被用到。所以这样的调用确实比较奇怪。
+再次，\lstinline|kern/init.c|中的\lstinline|mp_main()|函数。这个函数是AP的第一个 C 函数，这里，AP初始化它的页表，初始化LAPIC单元，初始化Env，中断等等。然后调用\lstinline|sched_yield|，寻找可以执行的进程。
+最后，\lstinline|page_init|函数，我们修改如下，这一过程比较简单，就是在Lab2的基础上再禁止\lstinline|MPENTRY_PADDR|代表的物理页的分配。
+\begin{lstlisting}[title=kern/pmap.c]
+static void init_use_page(size_t page) {
+	pages[page].pp_ref = 1;
+	pages[page].pp_link = NULL;
+}
+
+static void init_free_page(size_t page) {
+	pages[page].pp_ref = 0;
+	pages[page].pp_link = page_free_list;
+	page_free_list = &pages[page];
+}
+
+void
+page_init(void)
+{
+	size_t i, iop, ext, cur, mp;
+	iop = PGNUM(IOPHYSMEM);
+	ext = PGNUM(EXTPHYSMEM);
+	cur = PGNUM(PADDR(boot_alloc(0)));
+	mp = PGNUM(MPENTRY_PADDR);
+
+	for (i = 0; i < npages; i++) {
+		if (i == 0)
+			init_use_page(i);
+		else if (iop <= i && i < ext)
+			init_use_page(i);
+		else if (ext <= i && i < cur)
+			init_use_page(i);
+		else if (i == mp)
+			init_use_page(i);
+		else
+			init_free_page(i);
+	}
+}
+\end{lstlisting}
 \begin{framed}
 \noindent\textbf{Question 1} Compare \lstinline|kern/mpentry.S| side by side with \lstinline|boot/boot.S|. Bearing in mind that \lstinline|kern/mpentry.S| is compiled and linked to run above \lstinline|KERNBASE| just like everything else in the kernel, what is the purpose of macro \lstinline|MPBOOTPHYS|? Why is it necessary in \lstinline|kern/mpentry.S| but not in \lstinline|boot/boot.S|? In other words, what could go wrong if it were omitted in \lstinline|kern/mpentry.S|? 
 Hint: recall the differences between the link address and the load address that we have discussed in Lab 1.
 \end{framed}
+宏的定义如下: \\
+\lstinline|#define MPBOOTPHYS(s) ((s) - mpentry_start + MPENTRY_PADDR)| \\ 
+它可以计算出一个内核线性地址\lstinline|s|对应的物理地址。\lstinline|boot/boot.S|里没有，是因为它跑在实模式下，直接对应物理地址。\lstinline|kern/entry.S|里面没有，是因为代码中使用了简单页表，使得\lstinline|KERNBASE|以上的线性地址被映射到了物理地址上(即\lstinline|[KERNBASE, KERNBASE+4MB)=>[0, 4MB)|）。而对于AP来说，我们没有使用简单页表，所以就需要\lstinline|MPBOOTPHYS|来计算绝对地址(物理地址)，而不是让编译器去搞定。
 
 \subsubsection{Per-CPU State and Initialization}
+CPU之间需要做区分，\lstinline|kern/cpu.h|中定义了\lstinline|CpuInfo|结构来表示一个CPU，\lstinline|cpunum()|函数用于返回调用这个函数的当前CPU序号，\lstinline|cpus|用于存储所有CPU的信息，\lstinline|thiscpu|宏用于表示当前CPU的\lstinline|CpuInfo|结构。
+每个CPU的状态有以下信息：
+\begin{itemize}
+\item Kernel栈，储存在\lstinline|percpu_kstacks|。
+\item TSS和TSS描述项，储存在\lstinline|CpuInfo.cpu_ts|中。
+\item 当前运行进程的指针，储存在\lstinline|CpuInfo.cpu_env|中。
+\item CPU的系统寄存器。
+\end{itemize}
+
 \begin{framed}
 \noindent\textbf{Exercise 3} Modify \lstinline|mem_init_mp()| (in \lstinline|kern/pmap.c|) to map per-CPU stacks starting at \lstinline|KSTACKTOP|, as shown in \lstinline|inc/memlayout.h|. The size of each stack is \lstinline|KSTKSIZE| bytes plus \lstinline|KSTKGAP| bytes of unmapped guard pages. Your code should pass the new check in \lstinline|check_kern_pgdir()|.
 \end{framed}
+
+这个练习要求修改\lstinline|mem_init_mp()|函数，为每一个CPU映射Kernel栈空间。另外栈空间之间还有保护页作为间隔。代码如下：
+\begin{lstlisting}[title=kern/pmap.c]
+static void
+mem_init_mp(void)
+{
+	int kstacktop_i;
+	int i;
+	for (i = 0; i < NCPU; ++i) { 
+		kstacktop_i = KSTACKTOP - i * (KSTKSIZE + KSTKGAP); 
+		boot_map_region(kern_pgdir, kstacktop_i - KSTKSIZE, KSTKSIZE, PADDR(percpu_kstacks[i]), PTE_W | PTE_P); 
+	}
+}
+\end{lstlisting}
 
 \begin{framed}
 \noindent\textbf{Exercise 4} The code in \lstinline|trap_init_percpu()| (\lstinline|kern/trap.c|) initializes the TSS and TSS descriptor for the BSP. It worked in Lab 3, but is incorrect when running on other CPUs. Change the code so that it can work on all CPUs. (Note: your new code should not use the global ts variable any more.)
 \end{framed}
 
+这个练习要求修改\lstinline|trap_init_percpu()|，使它能设置每个CPU的TSS进行设置，包括设置TSS的Kernel栈指针。其实参考注释，一步一步来就可以了。代码如下:
+\begin{lstlisting}[title=kern/trap.c]
+void
+trap_init_percpu(void)
+{
+	int i = thiscpu->cpu_id;
+	thiscpu->cpu_ts.ts_esp0 = KSTACKTOP - i * (KSTKSIZE + KSTKGAP);
+	thiscpu->cpu_ts.ts_ss0 = GD_KD;
+	gdt[(GD_TSS0 >> 3) + i] = SEG16(STS_T32A, (uint32_t) &(thiscpu->cpu_ts), sizeof(struct Taskstate), 0);
+	gdt[(GD_TSS0 >> 3) + i].sd_s = 0;
+	ltr((GD_TSS0 + (i << 3)) & ~0x7);
+	lidt(&idt_pd);
+}
+\end{lstlisting}
+
 \subsection{Locking}
+我们需要确保只有一个CPU在运行Kernel代码。所以我们采用了Big Kernel Lock来限制Kernel代码的运行。另外JOS还提供了\lstinline|lock_kernel|和\lstinline|unlock_kernel|这两个函数来简化我们的操作。
 \begin{framed}
 \noindent\textbf{Exercise 5} Apply the big kernel lock as described above, by calling \lstinline|lock_kernel()| and \lstinline|unlock_kernel()| at the proper locations.
 \end{framed}
+这个练习就是要求我们实现Big Kernel Lock，不过其实提示的已经非常明显了。我们只需要记住，在\lstinline|env_run()|里面，也就是重新回到User Mode时，需要释放锁；其余进入Kernel Mode时，需要加上锁。代码如下：
+\begin{lstlisting}[title=kern/init.c]
+void
+i386_init(void)
+{
+	extern char edata[], end[];
+	memset(edata, 0, end - edata);
+	cons_init();
+	cprintf("6828 decimal is %o octal!\n", 6828);
+	mem_init();
+	env_init();
+	trap_init();
+	mp_init();
+	lapic_init();
+	pic_init();
+	lock_kernel();
+	boot_aps();
+#if defined(TEST)
+	ENV_CREATE(TEST, ENV_TYPE_USER);
+#else
+	ENV_CREATE(user_priorityhigh, ENV_TYPE_USER);
+	ENV_CREATE(user_prioritynormal, ENV_TYPE_USER);
+	ENV_CREATE(user_prioritylow, ENV_TYPE_USER);
+#endif
+	sched_yield();
+}
+\end{lstlisting}
+\begin{lstlisting}[title=kern/init.c]
+void
+mp_main(void)
+{ 
+	lcr3(PADDR(kern_pgdir));
+	cprintf("SMP: CPU %d starting\n", cpunum());
+	lapic_init();
+	env_init_percpu();
+	trap_init_percpu();
+	xchg(&thiscpu->cpu_status, CPU_STARTED);
+	lock_kernel();
+	sched_yield();
+}
+\end{lstlisting}
+\begin{lstlisting}[title=kern/trap.c]
+void
+trap(struct Trapframe *tf)
+{
+	asm volatile("cld" ::: "cc");
+	extern char *panicstr;
+	if (panicstr)
+		asm volatile("hlt");
+	if (xchg(&thiscpu->cpu_status, CPU_STARTED) == CPU_HALTED)
+		lock_kernel();
+	assert(!(read_eflags() & FL_IF));
+	if ((tf->tf_cs & 3) == 3) {
+		lock_kernel();
+		assert(curenv);
+		...
+	}
+	...
+}
+\end{lstlisting}
+\begin{lstlisting}[title=kern/env.c]
+void
+env_run(struct Env *e)
+{
+	if (curenv != e) {
+		if (curenv && curenv->env_status == ENV_RUNNING)
+			curenv->env_status = ENV_RUNNABLE;
+		curenv = e;
+		e->env_status = ENV_RUNNING;
+		lcr3(PADDR(e->env_pgdir));
+	}
+	e->env_runs ++;
+	unlock_kernel();
+	env_pop_tf(&(e->env_tf));
+}
+\end{lstlisting}
 \begin{framed}
 \noindent\textbf{Question 2} It seems that using the big kernel lock guarantees that only one CPU can run the kernel code at a time. Why do we still need separate kernel stacks for each CPU? Describe a scenario in which using a shared kernel stack will go wrong, even with the protection of the big kernel lock.
 \end{framed}
+显然我们需要给每个CPU一个Kernel栈，这是因为两个CPU可能几乎同时发生中断，这样就会把Trapframe压入Kernel栈，但是由于我们的\lstinline|lock_kernel()|加在了\lstinline|trap()|里面。所以在中断同时发生的时候，Trapframe压入栈这一过程就会出现竞争，导致错误。
 
 \subsection{Round-Robin Scheduling}
 \begin{framed}
@@ -108,44 +310,410 @@ Back in environment 00001002, iteration 1.
 After the \lstinline|yield| programs exit, there will be no runnable environment in the system, the scheduler should invoke the JOS kernel monitor. If any of this does not happen, then fix your code before proceeding.
 \end{framed}
 
-\subsection{The Breakpoint Exception}
-\begin{framed}
-\noindent\textbf{Exercise 6} Modify \lstinline|trap_dispatch()| to make breakpoint exceptions invoke the kernel monitor. You should now be able to get make grade to succeed on the breakpoint test. 
-\end{framed}
+这个练习就是要求我们实现\lstinline|sched_yield()|这一函数。这一函数要求使用Round-robin的方式，也就是每个进程轮着跑一遍。
+实现方式有以下几个要求:
+\begin{itemize}
+\item 需要首先找到一个\lstinline|ENV_RUNNABLE|的进程，然后通过\lstinline|env_run()|来运行它。
+\item 永远不要让两个CPU运行同一个进程，可以通过识别\lstinline|ENV_RUNNING|来判断是否有CPU在运行这个进程。
+\item User Mode通过\lstinline|sys_yield()|来调用\lstinline|sched_yield()|
+\end{itemize}
+
+我们实现如下：
+\begin{lstlisting}[title=kern/sched.c]
+void
+sched_yield(void)
+{
+	struct Env *idle;
+	int i;
+	uint32_t min_runs = 0xffffffff;
+	int min_choice = -1;
+	if (thiscpu->cpu_env) {
+		if (env_priority_enabled) {
+			for (i = 0; i < NENV; i++)
+				if (envs[i].env_status == ENV_RUNNABLE) {
+					if ((envs[i].env_runs >> envs[i].env_priority) < min_runs) {
+						min_runs = envs[i].env_runs >> envs[i].env_priority;
+						min_choice = i;
+					}
+				}
+			if (min_choice != -1)
+				env_run(&envs[min_choice]);
+			if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+				env_run(thiscpu->cpu_env);
+		} else {
+			int cur_id = ENVX(thiscpu->cpu_env->env_id);
+			for (i = (cur_id + 1) % NENV; i != cur_id; i = (i + 1) % NENV)
+				if (envs[i].env_status == ENV_RUNNABLE)
+					break;
+			if (i != cur_id)
+				env_run(&envs[i]);
+			if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+				env_run(thiscpu->cpu_env);
+		}
+	} else {
+		for (i = 0; i < NENV; i++)
+			if (envs[i].env_status == ENV_RUNNABLE)
+				break;
+		if (i != NENV)
+			env_run(&envs[i]);
+	}
+	sched_halt();
+}
+\end{lstlisting}
+我们先不考虑\lstinline|env_priority_enabled|这个分支。
+
+首先，如果没有进程可以运行了，我们调用\lstinline|sched_halt()|。这个函数是最新的实验材料里才添加出来的函数，网上一些版本的代码都让CPU去运行IDLE进程，并且在\lstinline|i386_init()|中就创建了IDLE的进程。但我们这里完全不需要！因为\lstinline|sched_halt()|会在有多个CPU时自动停止当前CPU的运行，在仅剩下一个CPU的时候调用\lstinline|monitor()|来打开控制台。
+
+其次，\lstinline|thiscpu->cpu_env|初始时是空的，如果为空，需要先设置一个进程先让这个CPU跑起来。黄睿哲的报告中指出了这个问题，但他那段代码还是错的。
+
+再次，我们也不需要判断这个\lstinline|envs[i].env_type|是否为\lstinline|ENV_TYPE_USER|。因为这个版本的代码只有这一种类别的进程。
+
+然后，运行\lstinline|make qemu CPUS=4|，我们的结果如下：
+\begin{center}
+\includegraphics[scale=0.25]{lab4.cpu4.png}
+\end{center}
 
 \begin{framed}
 \noindent\textbf{Question 3} In your implementation of \lstinline|env_run()| you should have called \lstinline|lcr3()|. Before and after the call to \lstinline|lcr3()|, your code makes references (at least it should) to the variable \lstinline|e|, the argument to \lstinline|env_run|. Upon loading the \lstinline|%cr3| register, the addressing context used by the MMU is instantly changed. But a virtual address (namely \lstinline|e|) has meaning relative to a given address context--the address context specifies the physical address to which the virtual address maps. Why can the pointer \lstinline|e| be dereferenced both before and after the addressing switch?
 \end{framed}
+不会。对于用户进程，其虚拟空间中的Kernel Address Space是保持不变的，也就是说映射到的永远是同一片物理内存区域。又由于指针\lstinline|e|指向的是Kernel Address Space中的envs数组的一项，所以，在运行\lstinline|lcr3()|前后，\lstinline|e|指向的是同一个地址，不会随着进程改变而改变。
 
 \begin{framed}
 \noindent\textbf{Question 4} Whenever the kernel switches from one environment to another, it must ensure the old environment's registers are saved so they can be restored properly later. Why? Where does this happen?
 \end{framed}
+如果寄存器的值变了，那么User Mode进程自然是无法正常恢复的。因为User Mode下的进程并不会意识到自己什么时候\lstinline|ENV_RUNNING|，什么时候\lstinline|ENV_RUNNABLE|。所以Kernel必须保证每个User进程运行的正确性。寄存器值记录在\lstinline|Env.env_tf|中，在\lstinline|env_pop_tf()|中被恢复出来。
 
 \subsection{System Calls for Environment Creation}
+JOS现在有了多进程支持，我们就可以实现一些必要的系统调用，使得用户进程可以创建、运行子进程。 
+
+Unix系统提供了\lstinline|fork()|系统调用，使得父进程可以创建子进程，父进程的整个地址空间的内容也复制一份给子进程。他们的唯一区别时，父进程中\lstinline|fork()|的返回值为子进程的ID，子进程中返回值为0。默认情况下，每个进程的地址空间是私有的。
+
+现在，我们首先要实现一些和\lstinline|fork()|相关的一系列系统调用，也就是这个练习的内容。
 \begin{framed}
 \noindent\textbf{Exercise 7} Implement the system calls described above in \lstinline|kern/syscall.c|. You will need to use various functions in \lstinline|kern/pmap.c| and \lstinline|kern/env.c|, particularly \lstinline|envid2env()|. For now, whenever you call \lstinline|envid2env()|, pass 1 in the \lstinline|checkperm| parameter. Be sure you check for any invalid system call arguments, returning \lstinline|-E_INVAL| in that case. Test your JOS kernel with \lstinline|user/dumbfork| and make sure it works before proceeding.
 \end{framed}
 
+\subsubsection{\lstinline|sys_exofork|}
+这个函数要求我们，用\lstinline|env_alloc|创建一个新的进程，而且要标记为\lstinline|ENV_NOT_RUNNABLE|，并且Trapframe也要和父进程一样。还有有趣的一点时，因为在子进程中返回值为0，所以我们必须对子进程的TrapFrame进行修改。代码如下：
+\begin{lstlisting}[title=kern/syscall.c]
+static envid_t
+sys_exofork(void)
+{
+	struct Env* e;
+	int r;
+	if ((r = env_alloc(&e, sys_getenvid())) < 0)
+		return r;
+	e->env_status = ENV_NOT_RUNNABLE;
+	e->env_tf = curenv->env_tf;
+	e->env_tf.tf_regs.reg_eax = 0;
+	return e->env_id;
+}
+\end{lstlisting}
+这里我们通过\lstinline|e->env_tf.tf_regs.reg_eax = 0;|来让子进程认为返回值是0。
+
+\subsubsection{\lstinline|sys_env_set_status|}
+这个函数可以设置指定进程的状态为\lstinline|ENV_RUNNABLE|或\lstinline|ENV_NOT_RUNNABLE|。父进程将子进程初始化完毕后，需要将子进程标记为\lstinline|ENV_RUNNABLE|时使用这个函数。代码如下：
+
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_env_set_status(envid_t envid, int status)
+{
+	struct Env* env;
+	int r;
+	if (status != ENV_RUNNABLE && status != ENV_NOT_RUNNABLE)
+		return -E_INVAL;
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r;
+	env->env_status = status;
+	return 0;
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|sys_page_alloc|}
+这个函数是为User进程分配一个物理页框，并将它映射到指定的线性地址。虽然注释写的很清楚，但是注释的分支条件太多，有很多错误代码需要返回。我们完成时需要耐心。
+代码如下：
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_env_set_status(envid_t envid, int status)
+{
+	struct Env* env;
+	int r;
+	if (status != ENV_RUNNABLE && status != ENV_NOT_RUNNABLE)
+		return -E_INVAL;
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r;
+	env->env_status = status;
+	return 0;
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|sys_page_map|}
+这个函数要求的分支就更多了。功能是将一个地址映射从一个User进程的地址空间复制到另一个User进程的地址空间。然后，它们的虚拟地址就映射到相同的物理地址了。
+
+函数的实现主要依靠\lstinline|page_lookup()|和\lstinline|page_insert()|函数。实现如下:
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_page_map(envid_t srcenvid, void *srcva,
+	     envid_t dstenvid, void *dstva, int perm)
+{
+	struct Env *srcenv, *dstenv;
+	int r;
+	pte_t *pte;
+	struct PageInfo *pp;
+	if (srcva >= (void *)UTOP || ROUNDUP(srcva, PGSIZE) != srcva
+		|| dstva >= (void *)UTOP || ROUNDUP(dstva, PGSIZE) != dstva)
+		return -E_INVAL;
+	if (!(perm & PTE_U) || !(perm & PTE_P) || (perm & ~PTE_SYSCALL))
+		return -E_INVAL;
+ 	if ((r = envid2env(srcenvid, &srcenv, 1)) < 0)
+		return r;
+	if ((r = envid2env(dstenvid, &dstenv, 1)) < 0)
+		return r;
+	pp = page_lookup(srcenv->env_pgdir, srcva, &pte); 
+	if (pp == NULL || ((perm & PTE_W) && !(*pte & PTE_W))) 
+		return -E_INVAL;
+	if ((r = page_insert(dstenv->env_pgdir, pp, dstva, perm)) < 0)
+		return r;
+	return 0;
+}
+\end{lstlisting}
+
+\subsubsection{\lstinline|sys_page_unmap|}
+这个函数将User进程中映射到某一给定线性地址的页面解除映射。函数实现主要依靠\lstinline|page_remove()|。代码如下:
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_page_unmap(envid_t envid, void *va)
+{
+	struct Env *env;
+	int r;
+	if (va >= (void *)UTOP || ROUNDUP(va, PGSIZE) != va)
+		return -E_INVAL;
+	if ((r = envid2env (envid, &env, 1)) < 0)
+		return r;
+	page_remove(env->env_pgdir, va);
+	return 0;
+}
+\end{lstlisting}
+
+写完这些函数以后，还要在\lstinline|sys_call()|中进行分发。代码如下:
+\begin{lstlisting}[title=kern/syscall.c]
+		case SYS_exofork:
+			return sys_exofork();
+		case SYS_env_set_status:
+			return sys_env_set_status((envid_t)a1, (int)a2);
+		case SYS_page_alloc:
+			return sys_page_alloc((envid_t)a1, (void *)a2, (int)a3);
+		case SYS_page_map:
+			return sys_page_map((envid_t)a1, (void *)a2, (envid_t)a3, (void *)a4, (int)a5);
+		case SYS_page_unmap: 
+			return sys_page_unmap((envid_t)a1, (void *)a2); 
+\end{lstlisting}
+
 \section{Copy-on-Write Fork}
+UNIX提供\lstinline|fork()|函数来创建子进程，父进程会将其地址空间整个拷贝给子进程。这一拷贝过程往往是\lstinline|fork()|中最花时间的。而且实际上，\lstinline|fork()|后面一般都跟着调用\lstinline|exec()|，所以拷贝给子进程的地址空间指向的地址很少被使用，所以这一拷贝显得不那么必要了。、
+
+出于这个考虑，UNIX后来让父子进程共用地址空间映射，直到其中的一方要修改该地址中的内容。这种机制成为COW（写时复制，copy on write)。在COW机制下，\lstinline|fork()|只将父进程的地址空间映射拷贝给子进程的地址空间。当两个进程试图写入共享页面时，就会产生一个Page Fault。这样UNIX就知道一个新的，私有的，可以写的页面。这样\lstinline|fork()|和\lstinline|exec()|就可以变得更快。可能子进程只需要复制一页就够了。
+ 
+在Lab 4接下来的实验中，我们就需要实现一个写时复制的\lstinline|fork()|库函数。之所以说是库函数，是因为它在User模式下运行。这样做可以让Kernel更加轻量，也能更可能工作正常。
 
 \subsection{User-level page fault handling}
+一个User级别的COW版本的\lstinline|fork()|，需要知道在写保护页面上的Page Fault。COW只是用户级Page Fault的一种应用。
+ 
+设置一个地址空间，其中Page Fault代表着某些特定的操作是可以的。例如，我们可以在一开始只分配一页内存作为栈区，随着程序对栈的使用的增加，可能会产生Page Fault，我们再按程序分配并映射新的页面，这种机制称为“按需分配”。
+
 \subsubsection{Setting the Page Fault Handler}
 \begin{framed}
 \noindent\textbf{Exercise 8} Implement the \lstinline|sys_env_set_pgfault_upcall| system call. Be sure to enable permission checking when looking up the environment ID of the target environment, since this is a "dangerous" system call.
-\end{framed}Clock Interrupts and Preemption
+\end{framed}
+这个练习要求我们为每个进程设置Page Fault的回调函数。代码如下：
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_env_set_pgfault_upcall(envid_t envid, void *func)
+{
+	struct Env* env;
+	int r;
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r;
+	env->env_pgfault_upcall = func;
+	return 0;
+}
+\end{lstlisting}
+
 \subsubsection{Normal and Exception Stacks in User Environments}
+在User进程正常执行时，它所运行的栈称为Normal User Stack，它的\lstinline|ESP|指向\lstinline|USTACKTOP|，栈的线性地址范围是\lstinline|[USTACKTOP - PGSIZE,USTACKTOP - 1]|。
+当Page Fault发生时，User进程所在的栈为User Exception Stack，它的\lstinline|ESP|指向\lstinline|UXSTACKTOP|，栈的线性地址范围是\lstinline|[UXSTACKTOP - PGSIZE,UXSTACKTOP - 1]|。
 \subsubsection{Invoking the User Page Fault Handler}
 \begin{framed}
 \noindent\textbf{Exercise 9} Implement the \lstinline|sys_env_set_pgfault_upcall| system call. Be sure to enable permission checking when looking up the environment ID of the target environment, since this is a "dangerous" system call.
 \end{framed}
+User进程发生Page Fault的处理流程如下：
+\begin{itemize}
+\item User进程发生Page Fault，先进入Kernel Mode，进入\lstinline|trap()|后进入\lstinline|page_fault_handler()|。
+\item \lstinline|page_fault_handler()|检查是否是User进程发生中断，如果是，向异常栈中压入一个\lstinline|UTrapframe|保存现场信息。
+\item Kernel切换道用户异常栈，并让用户程序重新运行。从\lstinline|curenv->env_pgfault_call|开始执行。
+\item Page Fault处理完毕后，回到用户运行栈。用户程序重新运行。
+\end{itemize}
+所以这个练习要求我们做的就是第二步，我们的实现如下：
+\begin{lstlisting}[title=env/trap.c]
+void
+page_fault_handler(struct Trapframe *tf)
+{
+	uint32_t fault_va;
+	fault_va = rcr2();
+	if ((tf->tf_cs & 3) != 3) {
+		print_trapframe(tf);
+		panic("page_fault_handler: Kernel Page Fault");
+	}
+
+	// LAB 4: Your code here.
+	if (curenv->env_pgfault_upcall) {
+		struct UTrapframe *utf;
+		if (UXSTACKTOP - PGSIZE <= tf->tf_esp && tf->tf_esp < UXSTACKTOP)
+			utf = (struct UTrapframe*)(tf->tf_esp - sizeof(struct UTrapframe) - 4);
+		else
+			utf = (struct UTrapframe*)(UXSTACKTOP - sizeof(struct UTrapframe));
+		user_mem_assert(curenv, (void*)utf, sizeof(struct UTrapframe), PTE_U | PTE_W | PTE_P);
+		utf->utf_fault_va = fault_va;
+		utf->utf_err = tf->tf_err;
+		utf->utf_regs = tf->tf_regs;
+		utf->utf_eip = tf->tf_eip;
+		utf->utf_eflags = tf->tf_eflags;
+		utf->utf_esp = tf->tf_esp;
+		curenv->env_tf.tf_eip = (uint32_t)curenv->env_pgfault_upcall;
+		curenv->env_tf.tf_esp = (uint32_t)utf;
+		env_run(curenv);
+	}
+
+	// Destroy the environment that caused the fault.
+	cprintf("[%08x] user fault va %08x ip %08x\n",
+		curenv->env_id, fault_va, tf->tf_eip);
+	print_trapframe(tf);
+	env_destroy(curenv);
+}
+\end{lstlisting}
+这里有一个细节需要注意，就是我们压入\lstinline|UTrapframe|时，如果是递归出现的Page Fault，我们需要隔开4个字节。这个在后面会用到。
+
+题干后面的那个问题：如果用户异常栈空间不足，可以在\lstinline|page_fault_handler()|继续分配新的页表，但页表的回收就成了一个问题。
+
 \subsubsection{User-mode Page Fault Entrypoint}
 \begin{framed}
 \noindent\textbf{Exercise 10} Implement the \lstinline|_pgfault_upcall| routine in \lstinline|lib/pfentry.S|. The interesting part is returning to the original point in the user code that caused the page fault. You'll return directly there, without going back through the kernel. The hard part is simultaneously switching stacks and re-loading the EIP.
 \end{framed}
+
+这个练习要求我们填写\lstinline|lib/pfentry.S|中的\lstinline|_pgfault_upcall|过程的汇编码，\lstinline|_pgfault_upcall|将调用\lstinline|page_fault_handler()|。这是因为用户中断处理程序返回到用户进程中时，需要同时更改\lstinline|ss:esp|和\lstinline|eip|。这时，如果先切换\lstinline|ss:esp|，那么\lstinline|eip|就不知道应该去哪里找了；又如果先切换回了\lstinline|eip|，那么下一条指令就执行在用户进程中了。
+
+所以我们的解决方法是：
+
+1）如果是递归出现的Page Fault，我们因为多留了4个字节。那么我们就可以将上一个\lstinline|UTrapframe|的\lstinline|eip|存储在空隙中，这样只要调用\lstinline|ret|指令就能同时恢复\lstinline|ss:esp|和\lstinline|eip|。
+
+2) 如果是第一个Page Fault。我们还是可以把返回的\lstinline|eip|保存在用户运行栈的栈顶下面4个字节，因为用户运行栈下面是没有被使用的，这样还是只要调用\lstinline|ret|指令就可以了。
+
+代码如下:
+\begin{lstlisting}[title=lib/pfentry.S]
+...
+_pgfault_upcall:
+	// Call the C page fault handler.
+	pushl %esp			// function argument: pointer to UTF
+	movl _pgfault_handler, %eax
+	call *%eax
+	addl $4, %esp			// pop function argume
+	// LAB 4: Your code here.
+	movl 0x30(%esp), %eax
+	subl $0x4, %eax
+	movl %eax, 0x30(%esp)
+	movl 0x28(%esp), %ebx
+	movl %ebx, (%eax)
+	add $0x8, %esp
+	popal
+	add $0x4, %esp
+	popfl
+	popl %esp
+	ret
+\end{lstlisting}
+
 \begin{framed}
 \noindent\textbf{Exercise 11} Finish \lstinline|set_pgfault_handler()| in \lstinline|lib/pgfault.c|.
 \end{framed}
+这个就是完成User库函数。代码如下:
+\begin{lstlisting}
+void
+set_pgfault_handler(void (*handler)(struct UTrapframe *utf))
+{
+	int r;
+
+	if (_pgfault_handler == 0) {
+		// First time through!
+		// LAB 4: Your code here.
+		 if ((r = sys_page_alloc(0, (void *)(UXSTACKTOP-PGSIZE), PTE_U | PTE_W | PTE_P)) < 0) {
+		 	panic("set_pgfault_handler: %e\n", r);
+		 }
+		 sys_env_set_pgfault_upcall(0, _pgfault_upcall);
+	}
+
+	// Save handler pointer for assembly to call.
+	_pgfault_handler = handler;
+}
+\end{lstlisting}
+
+\subsection{Testing}
+这里分别解释两个用户程序的区别：
+
+\begin{lstlisting}[title=user/faultdie.c]
+void
+handler(struct UTrapframe *utf)
+{
+	void *addr = (void*)utf->utf_fault_va;
+	uint32_t err = utf->utf_err;
+	cprintf("i faulted at va %x, err %x\n", addr, err & 7);
+	sys_env_destroy(sys_getenvid());
+}
+
+void
+umain(int argc, char **argv)
+{
+	set_pgfault_handler(handler);
+	*(int*)0xDeadBeef = 0;
+}
+\end{lstlisting}
+这个程序试图写入0xDeadBeef，产生Page Fault，然后自行Destroy。
+
+\begin{lstlisting}[title=user/faultallocbad.c]
+void
+handler(struct UTrapframe *utf)
+{
+	int r;
+	void *addr = (void*)utf->utf_fault_va;
+
+	cprintf("fault %x\n", addr);
+	if ((r = sys_page_alloc(0, ROUNDDOWN(addr, PGSIZE),
+				PTE_P|PTE_U|PTE_W)) < 0)
+		panic("allocating at %x in page fault handler: %e", addr, r);
+	snprintf((char*) addr, 100, "this string was faulted in at %x", addr);
+}
+
+void
+umain(int argc, char **argv)
+{
+	set_pgfault_handler(handler);
+	sys_cputs((char*)0xDEADBEEF, 4);
+}
+\end{lstlisting}
+这个程序访问地址0xDEADBEEF时调用的是\lstinline|sys_cputs()|，而\lstinline|sys_cputs()|访问地址前会调用\lstinline|user_mem_assert()|，而此时地址没有分配，因此产生Assertion Failure。 
+
 \subsection{Implementing Copy-on-Write Fork}
+我们可以根据\lstinline|user/dumbfork.c|来实现\lstinline|fork()|。它的基本流程如下：
+
+1. 父进程调用\lstinline|set_pgfault_handler()|将它的Page Fault回调函数设为\lstinline|pgfault()|。
+2. 父进程调用\lstinline|sys_exofork()|创建子进程。
+3. 遍历父进程的地址空间的\lstinline|UTOP|以下的部分，对于每个标记为COW或Writable的页面，父进程调用\lstinline|duppage()|将该页面映射到子进程的地址空间中，并标记为COW，并且将父进程自己的地址空间中那个标记COW。需要注意的是，对于用户异常栈，父进程不能使用COW策略。
+4. 父进程设置子进程的Page Fault Handler的起始地址。 
+5. 父进程将子进程设置为RUNNABLE。
+
+而User进程的Page Fault Handler的流程如下：
+1. User进程产生Page Fault按照一般的中断流程，进入汇编码\lstinline|_pgfault_upcall|. 调用进入\lstinline|page_fault_handler()|函数后，调用\lstinline|lib/fork.c|中的\lstinline|pgfault()|函数。
+2. \lstinline|pgfault()|检查错误错误是否为\lstinline|FEC_WR|，对应地址的页目录项是否为\lstinline|PTE_COW|，若有不是则panic。 
+3. \lstinline|pgfault()|分配一张新页面，接着将它映射到一个临时的线性地址, 然后将原页面内容复制到新页面，最后将临时页面映射到正确的地址，并标记为相应读写权限，替换掉原有的映射。 
+
 \begin{framed}
 \noindent\textbf{Exercise 12} Implement \lstinline|fork|, \lstinline|duppage| and \lstinline|pgfault| in \lstinline|lib/fork.c|.
 
@@ -169,9 +737,90 @@ Test your code with the forktree program. It should produce the following messag
 	1006: I am '101'
 \end{lstlisting}
 \end{framed}
+
+根据以上思路，我们的实现如下：
+\begin{lstlisting}[title=lib/fork.c]
+envid_t
+fork(void)
+{
+	envid_t envid;
+	uint8_t *addr;
+	int r;
+	extern void _pgfault_upcall(); 
+
+	set_pgfault_handler(pgfault);
+	if ((envid = sys_exofork()) < 0)
+		panic("fork: sys_exofork: %e", envid);
+	if (envid == 0) {
+		thisenv = &envs[ENVX(sys_getenvid())];
+		return 0;
+	}
+	for (addr = 0; addr < (uint8_t*)(UXSTACKTOP - PGSIZE); addr += PGSIZE) {
+		if ((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P))
+			duppage(envid, (unsigned)addr);
+	}
+	if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)) < 0)
+		panic("fork: sys_env_set_pgfault_upcall: %e", r);
+	if ((r = sys_page_alloc(envid, (void*) UXSTACKTOP - PGSIZE, PTE_U | PTE_W | PTE_P)) < 0)
+		panic("fork: sys_page_alloc: %e", r);
+	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
+		panic("fork: sys_env_set_status: %e", r);
+	return envid;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[title=lib/fork.c]
+static int
+duppage(envid_t envid, unsigned pn)
+{
+	int r;
+	void *addr = (void *)(pn);
+	pte_t pte = uvpt[PGNUM(pn)];
+	if (!(pte & PTE_P) || !(pte & PTE_U))
+	 	return -E_INVAL;
+	if ((pte & PTE_W) || (pte & PTE_COW)) {
+		if ((r = sys_page_map(0, addr, envid, addr, PTE_U | PTE_P | PTE_COW)) < 0)
+			panic("duppage: sys_page_map: %e", r);
+		if ((r = sys_page_map(0, addr, 0, addr, PTE_U | PTE_P | PTE_COW)) < 0)
+			panic("duppage: sys_page_map: %e", r);
+	} else {
+		if ((r = sys_page_map(0, addr, envid, addr, PGOFF(pte))) < 0)
+			panic("duppage: sys_page_map: %e", r);
+	}
+	return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[title=lib/fork.c]
+static void
+pgfault(struct UTrapframe *utf)
+{
+	void *addr = (void *) utf->utf_fault_va;
+	uint32_t err = utf->utf_err;
+	int r;
+ 	pte_t pte = uvpt[PGNUM((uint32_t)addr)];
+	addr = (void*)ROUNDDOWN((uint32_t)addr, PGSIZE);
+	if (!(err & FEC_WR))
+		panic("pgfault: the faulting access was not a write!");
+	if (!(pte & PTE_COW))
+		panic("pgfault: the faulting access was not to a copy-on-write page");
+	if ((r = sys_page_alloc(0, PFTEMP, PTE_U | PTE_P | PTE_W)) < 0)
+		panic("pgfault: sys_page_alloc: %e", r);
+	memmove(PFTEMP, addr, PGSIZE); 
+	if ((r = sys_page_map(0, PFTEMP, 0, addr, PTE_U | PTE_P | PTE_W)) < 0)
+		panic("pgfault: sys_page_map: %e", r);
+}
+\end{lstlisting}
 \section{Preemptive Multitasking and Inter-Process communication (IPC)}
+在 part C，我们将实现抢占式调度，实现进程之间通信的机制。
 \subsection{Clock Interrupts and Preemption}
+如果有一些不合做的用户进程，像\lstinline|user/spin.c|创建出来的子进程一样，它们通过死循环，使它们的父进程和Kernel都没有方法取得CPU控制权。为了避免这种情况，Kernel需要能抢占运行中的User进程，这需要JOS能够支持外部时钟中断。 
+
 \subsubsection{Interrupt discipline}
+IRQ表示外部中断，一共有16种，编号为0至15。但是外部中断在IDT中的映射不是固定的。\lstinline|kern/picirq.c|的\lstinline|pic_init()|将0到15号外部中断映射到 IDT表项的\lstinline|IRQ_OFFSET|至\lstinline|IRQ_OFFSET+15|。\lstinline|inc/trap.h|中\lstinline|IRQ_OFFSET|被定义为 32，因此外部中断的 IDT 表项为 \lstinline|32-47|. 其中，\lstinline|IRQ 0|是时钟中断，因此\lstinline|IDT[IRQ_OFFSET+0]|中包含了时钟中断处理程序的起始地址。 
+
+在JOS中，我们做了相应简化。Kernel进程时，外部设备的中断总是被屏蔽；而User进程中总是被开启。这是通过设置\lstinline|%eflags|的\lstinline|FL_IF|位来控制的。
+
 \begin{framed}
 \noindent\textbf{Exercise 13} Modify \lstinline|kern/trapentry.S| and \lstinline|kern/trap.c| to initialize the appropriate entries in the IDT and provide handlers for IRQs 0 through 15. Then modify the code in \lstinline|env_alloc()| in \lstinline|kern/env.c| to ensure that user environments are always run with interrupts enabled.
 
@@ -179,17 +828,45 @@ The processor never pushes an error code or checks the Descriptor Privilege Leve
 
 After doing this exercise, if you run your kernel with any test program that runs for a non-trivial length of time (e.g., \lstinline|spin|), you should see the kernel print trap frames for hardware interrupts. While interrupts are now enabled in the processor, JOS isn't yet handling them, so you should see it misattribute each interrupt to the currently running user environment and destroy it. Eventually it should run out of environments to destroy and drop into the monitor.
 \end{framed}
+这个练习首先要我们增加Handler，但是Lab 3中我已经添加了所有256个中断的handler,\lstinline|trap_init()|中也设置了所有handler的IDT表项。所以唯一的修改就是开启\lstinline|FL_HF|。
+\begin{lstlisting}[title=kern/env.c]
+int
+env_alloc(struct Env **newenv_store, envid_t parent_id)
+{
+	...
+	// Enable interrupts while in user mode.
+	// LAB 4: Your code here.
+	e->env_tf.tf_eflags |= FL_IF;
+	...
+}
+\end{lstlisting}
+
 \subsubsection{Handling Clock Interrupts}
 \begin{framed}
 \noindent\textbf{Exercise 14} Modify the kernel's \lstinline|trap_dispatch()| function so that it calls \lstinline|sched_yield()| to find and run a different environment whenever a clock interrupt takes place.
 
 You should now be able to get the \lstinline|user/spin| test to work: the parent environment should fork off the child, \lstinline|sys_yield()| to it a couple times but in each case regain control of the CPU after one time slice, and finally kill the child environment and terminate gracefully.
 \end{framed}
+我们开启了外部中断，但是还没有处理他们。 所以这个练习里，我们需要在\lstinline|trap_dispatch()|函数中处理相应情况，代码如下:
+\begin{lstlisting}[title=kern/trap.c]
+static void
+trap_dispatch(struct Trapframe *tf)
+{
+	...
+	// Handle clock interrupts. Don't forget to acknowledge the
+	// interrupt using lapic_eoi() before calling the scheduler!
+	// LAB 4: Your code here.
+	if (tf->tf_trapno == IRQ_OFFSET+IRQ_TIMER) {
+		lapic_eoi();
+		sched_yield();
+		return;
+	}
+	...
+}
+\end{lstlisting}
+
 \subsection{Inter-Process communication (IPC)}
-\subsubsection{IPC in JOS}
-\subsubsection{Sending and Receiving Messages}
-\subsubsection{Transferring Pages}
-\subsubsection{Implementing IPC}
+
 \begin{framed}
 \noindent\textbf{Exercise 15} Implement \lstinline|sys_ipc_recv| and \lstinline|sys_ipc_try_send| in \lstinline|kern/syscall.c|. Read the comments on both before implementing them, since they have to work together. When you call \lstinline|envid2env| in these routines, you should set the checkperm flag to 0, meaning that any environment is allowed to send IPC messages to any other environment, and the kernel does no special permission checking other than verifying that the target envid is valid.
 

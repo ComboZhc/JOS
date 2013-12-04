@@ -64,7 +64,7 @@ duppage(envid_t envid, unsigned pn)
 
 	// LAB 4: Your code here.
 	void *addr = (void *)(pn);
-	// This is NOT what you should do in your fork.
+	//	This is NOT what you should do in your fork.
 	if ((r = sys_page_alloc(envid, addr, PTE_P|PTE_U|PTE_W)) < 0)
 		panic("sys_page_alloc: %e", r);
 	if ((r = sys_page_map(envid, addr, 0, PFTEMP, PTE_P|PTE_U|PTE_W)) < 0)
