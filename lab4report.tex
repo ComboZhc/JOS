@@ -701,18 +701,17 @@ umain(int argc, char **argv)
 这个程序访问地址0xDEADBEEF时调用的是\lstinline|sys_cputs()|，而\lstinline|sys_cputs()|访问地址前会调用\lstinline|user_mem_assert()|，而此时地址没有分配，因此产生Assertion Failure。 
 
 \subsection{Implementing Copy-on-Write Fork}
-我们可以根据\lstinline|user/dumbfork.c|来实现\lstinline|fork()|。它的基本流程如下：
+我们可以根据\lstinline|user/dumbfork.c|来实现\lstinline|fork()|。它的基本流程如下：\\
+1. 父进程调用\lstinline|set_pgfault_handler()|将它的Page Fault回调函数设为\lstinline|pgfault()|。\\
+2. 父进程调用\lstinline|sys_exofork()|创建子进程。\\
+3. 遍历父进程的地址空间的\lstinline|UTOP|以下的部分，对于每个标记为COW或Writable的页面，父进程调用\lstinline|duppage()|将该页面映射到子进程的地址空间中，并标记为COW，并且将父进程自己的地址空间中那个标记COW。需要注意的是，对于用户异常栈，父进程不能使用COW策略。\\
+4. 父进程设置子进程的Page Fault Handler的起始地址。 \\
+5. 父进程将子进程设置为RUNNABLE。\\
 
-1. 父进程调用\lstinline|set_pgfault_handler()|将它的Page Fault回调函数设为\lstinline|pgfault()|。
-2. 父进程调用\lstinline|sys_exofork()|创建子进程。
-3. 遍历父进程的地址空间的\lstinline|UTOP|以下的部分，对于每个标记为COW或Writable的页面，父进程调用\lstinline|duppage()|将该页面映射到子进程的地址空间中，并标记为COW，并且将父进程自己的地址空间中那个标记COW。需要注意的是，对于用户异常栈，父进程不能使用COW策略。
-4. 父进程设置子进程的Page Fault Handler的起始地址。 
-5. 父进程将子进程设置为RUNNABLE。
-
-而User进程的Page Fault Handler的流程如下：
-1. User进程产生Page Fault按照一般的中断流程，进入汇编码\lstinline|_pgfault_upcall|. 调用进入\lstinline|page_fault_handler()|函数后，调用\lstinline|lib/fork.c|中的\lstinline|pgfault()|函数。
-2. \lstinline|pgfault()|检查错误错误是否为\lstinline|FEC_WR|，对应地址的页目录项是否为\lstinline|PTE_COW|，若有不是则panic。 
-3. \lstinline|pgfault()|分配一张新页面，接着将它映射到一个临时的线性地址, 然后将原页面内容复制到新页面，最后将临时页面映射到正确的地址，并标记为相应读写权限，替换掉原有的映射。 
+而User进程的Page Fault Handler的流程如下：\\
+1. User进程产生Page Fault按照一般的中断流程，进入汇编码\lstinline|_pgfault_upcall|. 调用进入\lstinline|page_fault_handler()|函数后，调用\lstinline|lib/fork.c|中的\lstinline|pgfault()|函数。\\
+2. \lstinline|pgfault()|检查错误错误是否为\lstinline|FEC_WR|，对应地址的页目录项是否为\lstinline|PTE_COW|，若有不是则panic。 \\
+3. \lstinline|pgfault()|分配一张新页面，接着将它映射到一个临时的线性地址, 然后将原页面内容复制到新页面，最后将临时页面映射到正确的地址，并标记为相应读写权限，替换掉原有的映射。 \\
 
 \begin{framed}
 \noindent\textbf{Exercise 12} Implement \lstinline|fork|, \lstinline|duppage| and \lstinline|pgfault| in \lstinline|lib/fork.c|.
@@ -866,6 +865,28 @@ trap_dispatch(struct Trapframe *tf)
 \end{lstlisting}
 
 \subsection{Inter-Process communication (IPC)}
+之前我们一直集中于操作系统如何保证进程之间的独立性，制造了一种一个进程独占一台机器的假象。操作系统的另一个重要服务，是让进程之间能够通信。UNIX的管道模型就是一个例子。
+
+\subsubsection{IPC in JOS}
+我们要实现两个系统调用\lstinline|sys_ipc_recv()|和\lstinline|sys_ipc_try_send()|，以及库函数中的包装函数\lstinline|ipc_recv()|和\lstinline|ipc_send()|，来提供简单的进程间的通信机制。
+
+JOS中进程之间传递的消息包括两个部分：一个32位的值，以及一个可选的单页面映射。后者能够让进程之间一次传递更多的值。
+
+\subsubsection{Sending and Receiving Messages}
+接收消息：User进程调用\lstinline|sys_ipc_recv|，然后系统将阻塞当前进程，直到收到消息。当一个进程在等待接收消息时，其他任何进程都可以向它发送消息。
+
+发送消息：发送进程指定接收进程的ID和发送的内容，并调用\lstinline|sys_ipc_try_send|，如果接收进程确实在等待消息，那么就传递消息过去并返回 0；否则返回\lstinline|-E_IPC_NOT_RECV|表示接收进程当前并不在等待接收消息。 
+
+User库函数\lstinline|ipc_recv|将\lstinline|sys_ipc_recv|进行封装，并从当前User进程的\lstinline|Env|结构中查询接收到的值。同样的，User库函数\lstinline|ipc_send|则不断地尝试调用\lstinline|sys_ipc_try_send|直到发送成功。
+ 
+\subsubsection{Transferring Pages}
+当一个接收进程调用\lstinline|sys_ipc_recv|并传入一个\lstinline|UTOP|以下的地址变量\lstinline|dstva|时，这代表着它希望接收一个页面映射。如果发送者发送了一个页面，那么这个页面将被映射到接收者地址空间的\lstinline|dstva|. 如果这个地址已经映射了一个页面，那么之前的页面将被unmap。
+
+当一个发送进程调用\lstinline|sys_ipc_try_send|并传入一个\lstinline|UTOP|以下的地址变量\lstinline|srcva|时，这代表着发送者希望发送一个当前被映射在\lstinline|srcva|的页面给接收者，权限指定为\lstinline|perm|。如果进程通信成功，那么发送者仍在其地址\lstinline|srcva|保留原有的页面映射，而接收者将在其地址\lstinline|dstva|处与发送者共享同一个映射。
+
+如果发送者或接收者的任何一方，并没有表示出希望接收一个页面映射的意愿，那么页面映射将不会被传递。在IPC之后，Kernel将接收者\lstinline|Env|结构中接收到的页面的权限位\lstinline|env_ipc_perm|进行设置，否则为0。
+
+\subsubsection{Implementing IPC}
 
 \begin{framed}
 \noindent\textbf{Exercise 15} Implement \lstinline|sys_ipc_recv| and \lstinline|sys_ipc_try_send| in \lstinline|kern/syscall.c|. Read the comments on both before implementing them, since they have to work together. When you call \lstinline|envid2env| in these routines, you should set the checkperm flag to 0, meaning that any environment is allowed to send IPC messages to any other environment, and the kernel does no special permission checking other than verifying that the target envid is valid.
@@ -874,7 +895,128 @@ Then implement the \lstinline|ipc_recv| and \lstinline|ipc_send| functions in \l
 
 Use the \lstinline|user/pingpong| and \lstinline|user/primes| functions to test your IPC mechanism. You might find it interesting to read \lstinline|user/primes.c| to see all the forking and IPC going on behind the scenes.
 \end{framed}
+这里的实现相对就不那么难了，代码如下：
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
+{
+	// LAB 4: Your code here.
+    struct Env *e;
+    struct PageInfo *page = NULL;
+    pte_t *pte;
+    if (envid2env(envid, &e, 0) < 0) 
+        return -E_BAD_ENV;
+    if (!e->env_ipc_recving)
+        return -E_IPC_NOT_RECV;
+    if ((uint32_t) srcva < UTOP && ROUNDDOWN(srcva, PGSIZE) != srcva)
+        return -E_INVAL;
+    if ((uint32_t) srcva < UTOP && (!(perm & PTE_U) || !(perm & PTE_P) || (perm & ~PTE_SYSCALL))) 
+        return -E_INVAL;
+	if ((uint32_t) srcva < UTOP && (page = page_lookup(curenv->env_pgdir, srcva, &pte)) == NULL)
+		return -E_INVAL;
+	if ((uint32_t) srcva < UTOP && (perm & PTE_W) && !(*pte & PTE_W)) 
+        return -E_INVAL;
+	if ((uint32_t) srcva < UTOP && page_insert(e->env_pgdir, page, e->env_ipc_dstva, perm))
+        return -E_NO_MEM;
+	e->env_ipc_perm = perm;
+    e->env_ipc_recving = 0;
+    e->env_ipc_from = curenv->env_id;
+    e->env_ipc_value = value;
+    e->env_tf.tf_regs.reg_eax = 0;
+    e->env_status = ENV_RUNNABLE;
+    return 0;
+}
 
+static int
+sys_ipc_recv(void *dstva)
+{
+	// LAB 4: Your code here.
+    if ((uint32_t) dstva < UTOP && ROUNDDOWN(dstva, PGSIZE) != dstva)
+        return -E_INVAL;
+	curenv->env_ipc_recving = 1;
+    curenv->env_ipc_dstva = dstva;
+    curenv->env_ipc_from = 0;
+    curenv->env_status = ENV_NOT_RUNNABLE;
+    sched_yield();
+	return 0;
+}
+
+...
+int32_t
+syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+{
+	...
+    case SYS_env_set_pgfault_upcall:
+        return sys_env_set_pgfault_upcall(a1, (void *) a2);
+    case SYS_ipc_try_send:
+        return sys_ipc_try_send(a1, a2, (void *)a3, a4);
+    case SYS_ipc_recv:
+        return sys_ipc_recv((void *)a1);
+	...
+}
+\end{lstlisting}
+
+\begin{lstlisting}[title=lib/ipc.c]
+int32_t
+ipc_recv(envid_t *from_env_store, void *pg, int *perm_store)
+{
+	// LAB 4: Your code here.
+	int r = sys_ipc_recv((pg) ? pg : (void *)UTOP);
+    if (from_env_store)
+        *from_env_store = (r < 0) ? 0 : thisenv->env_ipc_from;
+    if (perm_store)
+        *perm_store = (r < 0 && (uint32_t) pg < UTOP) ? 0 : thisenv->env_ipc_perm;
+    if (r < 0)
+        return r;
+    return thisenv->env_ipc_value;
+}
+
+void
+ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
+{
+	// LAB 4: Your code here.
+	int r;
+    while ((r = sys_ipc_try_send(to_env, val, pg ? pg : (void *) UTOP, perm)) != 0) {
+        if (r != -E_IPC_NOT_RECV)
+            panic("ipc_send: error %e", r);
+        else
+        	sys_yield();
+    }
+}
+
+envid_t
+ipc_find_env(enum EnvType type)
+{
+	int i;
+	for (i = 0; i < NENV; i++)
+		if (envs[i].env_type == type)
+			return envs[i].env_id;
+	return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[title=lib/syscall.c]
+int
+sys_env_set_pgfault_upcall(envid_t envid, void *upcall)
+{
+	return syscall(SYS_env_set_pgfault_upcall, 1, envid, (uint32_t) upcall, 0, 0, 0);
+}
+
+int
+sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, int perm)
+{
+	return syscall(SYS_ipc_try_send, 0, envid, value, (uint32_t) srcva, perm, 0);
+}
+
+int
+sys_ipc_recv(void *dstva)
+{
+	return syscall(SYS_ipc_recv, 1, (uint32_t)dstva, 0, 0, 0, 0);
+}
+\end{lstlisting}
+这里需要注意的是,\lstinline|ipc_send|应该不停地调用\lstinline|sys_ipc_try_send|，如果返回的值是\lstinline|-E_IPC_NOT_RECV|，那么也应该继续循环。
+
+最后，我们执行\lstinline|make grade|，结果如下：
 \begin{center}
 \includegraphics[scale=0.25]{lab4.grade.png}
 \end{center}
@@ -887,6 +1029,196 @@ Challenge! Add a less trivial scheduling policy to the kernel, such as a fixed-p
 
 Write a test program or two that verifies that your scheduling algorithm is working correctly (i.e., the right environments get run in the right order). It may be easier to write these test programs once you have implemented \lstinline|fork()| and IPC in parts B and C of this lab.
 \end{framed}
+这个Challenge是让我们实现\lstinline|sched_yield()|的优先级调度算法。这不是简单的Round-robin调度，而是将每个进程赋予一个优先级，优先级高的应该比优先级低的先运行。
+
+黄睿哲的报告里给出了一种实现，这种实现每次运行\lstinline|RUNNABLE|中优先级最高的进程。但这会有一个问题：Starvation！如果一个优先级最高的进程不断地再运行，那么优先级低的就永远不会被运行。所以我们必须用一种防止Starvation的方法。
+
+我用的方法是，考虑每个进程的运行次数\lstinline|env_runs|，并且优先级定义如下：
+\begin{lstlisting}[title=inc/env.h]
+#define ENV_PRIORITY_HIGH   2
+#define ENV_PRIORITY_NORMAL 1  
+#define ENV_PRIORITY_LOW    0
+
+struct Env {
+	...
+	// Lab 4 Challenge 2
+	uint32_t env_priority;
+};
+\end{lstlisting}
+那么我每次就取\lstinline|env_runs >> env_priority|最低的，这样在高优先级运行了低优先级4倍的次数之后，低优先级就可以运行了。这样就防止了Starvation的出现。
+
+我的实现代码如下：
+\begin{lstlisting}[title=kern/env.c]
+...
+struct Env *envs = NULL;		// All environments
+bool env_priority_enabled = 0; // Lab 4 Challenge 2
+\end{lstlisting}
+
+\begin{lstlisting}[title=kern/env.h]
+...
+extern struct Env *envs;		// All environments
+extern bool env_priority_enabled;
+\end{lstlisting}
+
+\begin{lstlisting}[title=kern/sched.c]
+void
+sched_yield(void)
+{
+	struct Env *idle;
+
+	// LAB 4: Your code here.
+	int i;
+	uint32_t min_runs = 0xffffffff;
+	int min_choice = -1;
+	if (thiscpu->cpu_env) {
+		if (env_priority_enabled) {
+			for (i = 0; i < NENV; i++)
+				if (envs[i].env_status == ENV_RUNNABLE) {
+					if ((envs[i].env_runs >> envs[i].env_priority) < min_runs) {
+						min_runs = envs[i].env_runs >> envs[i].env_priority;
+						min_choice = i;
+					}
+				}
+			if (min_choice != -1)
+				env_run(&envs[min_choice]);
+			if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+				env_run(thiscpu->cpu_env);
+		} else {
+			int cur_id = ENVX(thiscpu->cpu_env->env_id);
+			for (i = (cur_id + 1) % NENV; i != cur_id; i = (i + 1) % NENV)
+				if (envs[i].env_status == ENV_RUNNABLE)
+					break;
+			if (i != cur_id)
+				env_run(&envs[i]);
+			if (thiscpu->cpu_env->env_status == ENV_RUNNING)
+				env_run(thiscpu->cpu_env);
+		}
+	} else {
+		for (i = 0; i < NENV; i++)
+			if (envs[i].env_status == ENV_RUNNABLE)
+				break;
+		if (i != NENV)
+			env_run(&envs[i]);
+	}
+	
+
+	// sched_halt never returns
+	sched_halt();
+}
+\end{lstlisting}
+这里需要注意的是，用户程序应该能够开启/关闭优先级调度，因为这种调度在进程很多时，每次yield都会扫描所有进程，所以会导致某些test运行速度奇慢。所以这里我还设置了\lstinline|env_priority_enabled|来让用户开启/关闭优先级调度模式。
+
+我还添加了几个系统调用:
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_env_set_priority(envid_t envid, uint32_t priority) {
+	struct Env *env; 
+	int r; 
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r; 
+	env->env_priority = priority; 
+	return 0;
+}
+
+static int
+sys_env_get_runs(envid_t envid) {
+	struct Env *env; 
+	int r; 
+	if ((r = envid2env(envid, &env, 1)) < 0)
+		return r; 
+	return env->env_runs;
+}
+
+static int
+sys_env_enable_priority(bool enabled) {
+	env_priority_enabled = enabled;
+	return 0;
+}
+\end{lstlisting}
+\begin{lstlisting}[title=lib/syscall.c]
+// Lab 4 Challenge 2
+int
+sys_env_set_priority(envid_t envid, uint32_t priority)
+{
+	return syscall(SYS_env_set_priority, 1, envid, priority, 0, 0, 0);
+}
+
+int
+sys_env_get_runs(envid_t envid)
+{
+	return syscall(SYS_env_get_runs, 0, envid, 0, 0, 0, 0);
+}
+
+int
+sys_env_enable_priority(bool enabled)
+{
+	return syscall(SYS_env_enable_priority, 1, enabled, 0, 0, 0, 0);
+}
+\end{lstlisting}
+有一些比较琐碎的代码修改就不贴出来了，最后还写了几个用户程序来测试
+\begin{lstlisting}[title=kern/priorityhigh.c]
+#include <inc/lib.h>
+
+#define TIMES 10
+
+void
+umain(int argc, char **argv)
+{
+	int i;
+	envid_t t = sys_getenvid();
+	sys_env_enable_priority(1);
+	sys_env_set_priority(t, ENV_PRIORITY_HIGH);
+	for (i = 0; i < TIMES; i++) {
+		cprintf("i am high priority env %08x [runs = %d]\n", t, sys_env_get_runs(t));
+		sys_yield();
+	}
+	return;
+}
+\end{lstlisting}
+\begin{lstlisting}[title=kern/prioritynormal.c]
+#include <inc/lib.h>
+
+#define TIMES 10
+
+void
+umain(int argc, char **argv)
+{
+	int i;
+	envid_t t = sys_getenvid();
+	sys_env_enable_priority(1);
+	sys_env_set_priority(t, ENV_PRIORITY_NORMAL);
+	for (i = 0; i < TIMES; i++) {
+		cprintf("i am normal priority env %08x [runs = %d]\n", t, sys_env_get_runs(t));
+		sys_yield();
+	}
+	return;
+}
+\end{lstlisting}
+\begin{lstlisting}[title=kern/prioritylow.c]
+#include <inc/lib.h>
+
+#define TIMES 10
+
+void
+umain(int argc, char **argv)
+{
+	int i;
+	envid_t t = sys_getenvid();
+	sys_env_enable_priority(1);
+	sys_env_set_priority(t, ENV_PRIORITY_LOW);
+	for (i = 0; i < TIMES; i++) {
+		cprintf("i am low priority env %08x [runs = %d]\n", t, sys_env_get_runs(t));
+		sys_yield();
+	}
+	return;
+}
+\end{lstlisting}
+\begin{lstlisting}[title=kern/init.c]
+	ENV_CREATE(user_priorityhigh, ENV_TYPE_USER);
+	ENV_CREATE(user_prioritynormal, ENV_TYPE_USER);
+	ENV_CREATE(user_prioritylow, ENV_TYPE_USER);
+\end{lstlisting}
+这里为什么要采用三个用户程序而没有用\lstinline|fork()|，是因为\lstinline|fork()|本身可能会有点慢，就无法保证高优先级，中优先级和低优先级三个程序是同时开始等待调用的。
 
 运行结果如下：
 \begin{center}
@@ -896,11 +1228,13 @@ Write a test program or two that verifies that your scheduling algorithm is work
 \section{Tips}
 \begin{packed_enum}
 \item Kernel调试信息可以用warn输出，User Mode则要用cprintf
-\item Regression Test很重要！Ex15就犯了这个错误！
+\item Regression Test很重要！Exercise 15就因为Lab 3多加了一句话让我调试了好久，就犯了这个错误！
 \item GDB调试基本上是不会有帮助的
-\item 参考的实验报告有很多结论是错的，一定要冷静分析。
+\item 参考的实验报告有很多结论是错的，一定要冷静分析。这句话好像说过很多次了。
+\item 有些代码实在是难写，比如Exercise 10，而且还很难理解。还好最后多看几次，渐渐地就明白了Trick在哪里。
 \end{packed_enum}
 
 \section{References}
-北京大学操作系统实习(实验班)报告, 黄睿哲.
+北京大学操作系统实习(实验班)报告，黄睿哲。
+操作系统JOS实习第一次报告，张弛。
 \end{document}
