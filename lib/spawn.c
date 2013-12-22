@@ -302,12 +302,11 @@ copy_shared_pages(envid_t child)
 {
 	uint8_t *addr;
 	int r;
-	for (addr = (uint8_t*)0x10000000; addr < (uint8_t*)0xD0000000; addr += PGSIZE) {
-		if ((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & (PTE_P | PTE_SHARE))) {
-			cprintf("SHARE@addr:%08x\n", addr);
-			if ((r = sys_page_map(0, addr, child, addr, (uvpt[PGNUM(addr)] & PTE_SYSCALL) | PTE_SHARE)) < 0)
-				panic("copy_shared_pages: sys_page_map: %e", r);
-		}
+	for (addr = (uint8_t*)0; addr < (uint8_t*)USTACKTOP - PGSIZE; addr += PGSIZE) {
+		if ((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P))
+			if (uvpt[PGNUM(addr)] & PTE_SHARE)
+				if ((r = sys_page_map(0, addr, child, addr, (uvpt[PGNUM(addr)] & PTE_SYSCALL) | PTE_SHARE)) < 0)
+					panic("copy_shared_pages: sys_page_map: %e", r);
 	}
 	return 0;
 }
