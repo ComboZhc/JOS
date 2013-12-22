@@ -26,7 +26,7 @@ umain(int argc, char **argv)
 		exit();
 	}
 	wait(r);
-	cprintf("%08x %08x fork handles PTE_SHARE %s\n", r, thisenv->env_id, strcmp(VA, msg) == 0 ? "right" : "wrong");
+	cprintf("fork handles PTE_SHARE %s\n", strcmp(VA, msg) == 0 ? "right" : "wrong");
 
 	// check spawn
 	if ((r = spawnl("/testpteshare", "testpteshare", "arg", 0)) < 0)
