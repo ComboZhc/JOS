@@ -1,0 +1,26 @@
+\BOOKMARK [1][-]{section.1}{User Environments and Exception Handling}{}
+\BOOKMARK [2][-]{subsection.1.1}{Environment State}{section.1}
+\BOOKMARK [2][-]{subsection.1.2}{Allocating the Environments Array}{section.1}
+\BOOKMARK [2][-]{subsection.1.3}{Creating and Running Environments}{section.1}
+\BOOKMARK [3][-]{subsubsection.1.3.1}{|envinit|}{subsection.1.3}
+\BOOKMARK [3][-]{subsubsection.1.3.2}{|envsetupvm|}{subsection.1.3}
+\BOOKMARK [3][-]{subsubsection.1.3.3}{|envalloc|}{subsection.1.3}
+\BOOKMARK [3][-]{subsubsection.1.3.4}{|regionalloc|}{subsection.1.3}
+\BOOKMARK [3][-]{subsubsection.1.3.5}{|loadicode|}{subsection.1.3}
+\BOOKMARK [3][-]{subsubsection.1.3.6}{|envcreate|}{subsection.1.3}
+\BOOKMARK [3][-]{subsubsection.1.3.7}{|envrun|}{subsection.1.3}
+\BOOKMARK [2][-]{subsection.1.4}{Handling Interrupts and Exceptions}{section.1}
+\BOOKMARK [2][-]{subsection.1.5}{Basics of Protected Control Transfer}{section.1}
+\BOOKMARK [2][-]{subsection.1.6}{Setting Up the IDT}{section.1}
+\BOOKMARK [1][-]{section.2}{Page Faults, Breakpoints Exceptions, and System Calls}{}
+\BOOKMARK [2][-]{subsection.2.1}{Handling Page Faults}{section.2}
+\BOOKMARK [2][-]{subsection.2.2}{The Breakpoint Exception}{section.2}
+\BOOKMARK [2][-]{subsection.2.3}{System calls}{section.2}
+\BOOKMARK [2][-]{subsection.2.4}{User-mode startup}{section.2}
+\BOOKMARK [2][-]{subsection.2.5}{Page faults and memory protection}{section.2}
+\BOOKMARK [1][-]{section.3}{Question}{}
+\BOOKMARK [1][-]{section.4}{Challenges}{}
+\BOOKMARK [2][-]{subsection.4.1}{Challenge 1}{section.4}
+\BOOKMARK [2][-]{subsection.4.2}{Challenge 2}{section.4}
+\BOOKMARK [1][-]{section.5}{Tips}{}
+\BOOKMARK [1][-]{section.6}{References}{}

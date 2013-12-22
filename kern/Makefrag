@@ -55,7 +55,8 @@ KERN_BINFILES :=	user/hello \
 			user/faultread \
 			user/faultreadkernel \
 			user/faultwrite \
-			user/faultwritekernel
+			user/faultwritekernel \
+			user/cha2
 
 # Binary files for LAB4
 KERN_BINFILES +=	user/idle \
@@ -74,7 +75,11 @@ KERN_BINFILES +=	user/idle \
 			user/fairness \
 			user/pingpong \
 			user/pingpongs \
-			user/primes
+			user/primes \
+			user/priorityhigh \
+			user/prioritynormal \
+			user/prioritylow
+
 # Binary files for LAB5
 KERN_BINFILES +=	user/testfile \
 			user/spawnhello \
