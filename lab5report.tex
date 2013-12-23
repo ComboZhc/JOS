@@ -1,0 +1,115 @@
+\documentclass[11pt]{article}
+\usepackage[top=1in, bottom=1in, left=1.25in, right=1.25in]{geometry}
+\usepackage[BoldFont,SlantFont,CJKsetspaces,CJKchecksingle]{xeCJK}
+\usepackage{framed}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{hyperref}
+\setCJKmainfont[BoldFont=SimHei]{SimSun}
+\setCJKmonofont{SimSun}
+\usepackage{graphicx}
+\usepackage{color}
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+\lstset{ %
+  backgroundcolor=\color{white},
+  basicstyle=\ttfamily,
+  breakatwhitespace=false,
+  breaklines=true,
+  captionpos=t,
+  commentstyle=\color{mygreen},
+  columns=flexible,
+  deletekeywords={...},
+  escapeinside={\%*}{*)},
+  extendedchars=true,
+  frame=single,
+  keepspaces=true,
+  keywordstyle=\color{blue},
+  language=C,
+  morekeywords={*,...},
+  numbers=none,
+  rulecolor=\color{black},
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  stepnumber=1,
+  stringstyle=\color{mymauve},
+  tabsize=2,
+  title=\lstname
+}
+\newenvironment{packed_enum}{
+\begin{enumerate}
+  \setlength{\itemsep}{1pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{enumerate}}
+\parindent 2em
+
+\begin{document}
+\title{\textbf{\huge{实验报告 Lab5}}\\
+10300240039 章超}
+\maketitle
+\section{File system preliminaries}
+第一部分，我们首先要使JOS拓展称为多处理器的系统，然后实现新的系统调用，从而使用户可以创建进程（JOS的Enviroment），进程调度将使用round-robin轮转式调度，在第三部分中再实现抢占式调度。
+\subsection{Disk Access}
+
+\begin{framed}
+\noindent\textbf{Exercise 1} \lstinline|i386_init| identifies the file system environment by passing the type \lstinline|ENV_TYPE_FS| to your environment creation function, \lstinline|env_create|. Modify \lstinline|env_create| in \lstinline|env.c|, so that it gives the file system environment I/O privilege, but never gives that privilege to any other environment.
+
+Make sure you can start the file environment without causing a General Protection fault. You should pass the "fs i/o" test in \lstinline|make grade|.
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question 1} Do you have to do anything else to ensure that this I/O privilege setting is saved and restored properly when you subsequently switch from one environment to another? Why?
+\end{framed}
+
+\subsection{The Block Cache}
+\begin{framed}
+\noindent\textbf{Exercise 2} Implement the \lstinline|bc_pgfault| functions in \lstinline|fs/bc.c|. \lstinline|bc_pgfault| is a page fault handler, just like the one your wrote in the previous lab for copy-on-write fork, except that its job is to load pages in from the disk in response to a page fault. When writing this, keep in mind that (1) \lstinline|addr| may not be aligned to a block boundary and (2) \lstinline|ide_read| operates in sectors, not blocks.
+
+Use \lstinline|make grade| to test your code. Your code should pass "check_super".
+\end{framed}
+
+\subsection{The file system interface}
+
+\section{Spawning Processes}
+\begin{framed}
+\noindent\textbf{Exercise 3} \lstinline|spawn| relies on the new syscall \lstinline|sys_env_set_trapframe| to initialize the state of the newly created environment. Implement \lstinline|sys_env_set_trapframe|. Test your code by running the \lstinline|user/spawnhello| program from \lstinline|kern/init.c|, which will attempt to spawn \lstinline|/hello| from the file system.
+
+Use \lstinline|make grade| to test your code.
+\end{framed}
+
+\subsection{Sharing library state across fork and spawn}
+\begin{framed}
+\noindent\textbf{Exercise 4} Change duppage in \lstinline|lib/fork.c| to follow the new convention. If the page table entry has the \lstinline|PTE_SHARE| bit set, just copy the mapping directly. (You should use \lstinline|PTE_SYSCALL|, not \lstinline|0xfff|, to mask out the relevant bits from the page table entry. \lstinline|0xfff| picks up the accessed and dirty bits as well.)
+
+Likewise, implement \lstinline|copy_shared_pages| in \lstinline|lib/spawn.c|. It should loop through all page table entries in the current process (just like fork did), copying any page mappings that have the \lstinline|PTE_SHARE| bit set into the child process.
+\end{framed}
+
+\section{The keyboard interface}
+\begin{framed}
+\noindent\textbf{Exercise 5} In your \lstinline|kern/trap.c|, call \lstinline|kbd_intr| to handle trap \lstinline|IRQ_OFFSET+IRQ_KBD| and \lstinline|serial_intr| to handle trap \lstinline|IRQ_OFFSET+IRQ_SERIAL|.
+\end{framed}
+
+\section{The Shell}
+\begin{framed}
+\noindent\textbf{Question 2} How long approximately did it take you to do this lab?
+\end{framed}
+
+\begin{framed}
+\noindent\textbf{Question 3} We simplified the file system this year with the goal of making more time for the final project. Do you feel like you gained a basic understanding of the file I/O in JOS? Feel free to suggest things we could improve.
+\end{framed}
+
+\section{Challenges}
+
+
+\section{Tips}
+\begin{packed_enum}
+\item Kernel调试信息可以用warn输出，User Mode则要用cprintf
+\end{packed_enum}
+
+\section{References}
+北京大学操作系统实习(实验班)报告，黄睿哲。
+操作系统JOS实习第一次报告，张弛。
+\end{document}
