@@ -51,65 +51,250 @@
 10300240039 章超}
 \maketitle
 \section{File system preliminaries}
-第一部分，我们首先要使JOS拓展称为多处理器的系统，然后实现新的系统调用，从而使用户可以创建进程（JOS的Enviroment），进程调度将使用round-robin轮转式调度，在第三部分中再实现抢占式调度。
+JOS已经写好了一个简单的，只读的，以磁盘为基础的文件系统。我们的任务就是把当前的代码修改到可以与文件系统对接上，并且\lstinline|spawn|可以通过路径来执行磁盘伤的文件。我们未必要详细了解文件系统的每个细节，比如磁盘存储结构。
+
+文件系统本身是作为微内核的形式实现的，也就是说它不在Kernel里，在自己的User Space进程里执行。其他进程需要通过发送IPC请求来与文件系统交互。
 \subsection{Disk Access}
+文件系统进程需要访问磁盘的文件，而目前的Kernel并没有提供这个服务。在传统的Monotholic的操作系统策略中，我们可以为Kernel添加IDE磁盘驱动器和必要的系统调用，来让文件系统调用。JOS中我们不采用这种方法，我们直接在User Space的文件系统进程中实现IDE磁盘驱动程序。然后只需要稍微修改一下Kernel，就能让文件系统进程具有访问磁盘的特权级别。 
+
+只要采用轮询，用可编程IO的方式实现磁盘访问，不使用中断，User Space中的磁盘操作很方便就能实现。当然使用中断是可能的，不过麻烦在于，Kernel需要支持相应的设备中断，并把它们分发给正确的User进程。
+
+x86处理器通过EFLAGS标志寄存器的IOPL位来决定保护模式的代码是否可以执行特殊的设备I/O指令，比如 IN 或 OUT 指令。因为我们需要访问的IDE磁盘寄存器位于 x86处理器的IO空间中而不是内存映射，因此我们需要做的仅仅是为文件系统进程设置相应的权限级别，使之可以访问这些寄存器。事实上，IOPL位为Kernel提供了一种“要么全有，要没全无”的方式来控制User进程是否能访问I/O空间。在JOS中，只有文件系统进程可以访问I/O空间，但是其他的用户进程不可以。 
 
 \begin{framed}
 \noindent\textbf{Exercise 1} \lstinline|i386_init| identifies the file system environment by passing the type \lstinline|ENV_TYPE_FS| to your environment creation function, \lstinline|env_create|. Modify \lstinline|env_create| in \lstinline|env.c|, so that it gives the file system environment I/O privilege, but never gives that privilege to any other environment.
 
 Make sure you can start the file environment without causing a General Protection fault. You should pass the "fs i/o" test in \lstinline|make grade|.
 \end{framed}
+这个练习很简单，代码如下:
+\begin{lstlisting}[title=kern/env.c]
+void
+env_create(uint8_t *binary, size_t size, enum EnvType type)
+{
+	// LAB 3: Your code here.
+	struct Env* e;
+	int r = env_alloc(&e, 0);
+	if (r < 0)
+		panic("env_create: %e\n", r);
+	load_icode(e, binary, size);
+	e->env_type = type;
+
+	// If this is the file server (type == ENV_TYPE_FS) give it I/O privileges.
+	// LAB 5: Your code here.
+	if (type == ENV_TYPE_FS)
+		e->env_tf.tf_eflags |= FL_IOPL_3;
+}
+\end{lstlisting}
 
 \begin{framed}
 \noindent\textbf{Question 1} Do you have to do anything else to ensure that this I/O privilege setting is saved and restored properly when you subsequently switch from one environment to another? Why?
 \end{framed}
 
+我们把这个权限设置在\lstinline|Trapframe|里，而中断发生时(比如进程切换)，我们会保证\lstinline|Trapframe|能够被正常的保存和恢复。这个是Lab3的实验内容了。
+
 \subsection{The Block Cache}
+接下来我们要实现文件系统中的在处理器虚拟内存基础上的Buffer Cache功能，这部分代码是在\lstinline|fs/bc.c|中。
+
+我们的文件系统能够支持的磁盘大小最多只有3GB。因此，我们在文件系统进程的线性地址空间中预留了3GB的区域来对应磁盘内容，即 0x10000000(\lstinline|DISKMAP|)到0xD0000000(\lstinline|DISKMAP+DISKMAX|)，作为一个虚拟内存空间到磁盘空间的映射。例如，磁盘block 0映射到0x10000000开始的线性地址，磁盘block 1映射到 0x10001000开始的线性地址，依此类推。\lstinline|fs/bc.c|中的\lstinline|diskaddr()|函数实现了block编号到对应线性地址的转换。 
+
+由于我们的文件系统进程的线性地址空间和其他进程是相互独立的，因此预留出3GB(占到文件系统集成空间的大部分)来映射磁盘是可行的。但是对于真实的系统，如果是32 位系统，那么因为线性地址空间只有4GB，而磁盘空间一般比它要大得多，因此这样映射是不可行的。不过对于64位系统，这种映射仍然可行。 
+
+显然将整个磁盘的内容读入内存是不合理的，我们采用一种“按需求读取磁盘”的策略，也即只有发生了Page Fault才进行磁盘读取，我们才会将相应的磁盘内容读入所映射的线性地址。这样可以防止将整个磁盘内容读入内存。
+
 \begin{framed}
 \noindent\textbf{Exercise 2} Implement the \lstinline|bc_pgfault| functions in \lstinline|fs/bc.c|. \lstinline|bc_pgfault| is a page fault handler, just like the one your wrote in the previous lab for copy-on-write fork, except that its job is to load pages in from the disk in response to a page fault. When writing this, keep in mind that (1) \lstinline|addr| may not be aligned to a block boundary and (2) \lstinline|ide_read| operates in sectors, not blocks.
 
-Use \lstinline|make grade| to test your code. Your code should pass "check_super".
+Use \lstinline|make grade| to test your code. Your code should pass \lstinline|check_super|.
 \end{framed}
 
+这个练习也不难，按照提示，先分配一页，再读入就可以了。
+\begin{lstlisting}[title=fs/bc.c]
+static void
+bc_pgfault(struct UTrapframe *utf)
+{
+	...
+	// LAB 5: you code here:
+	addr = ROUNDDOWN(addr, PGSIZE);
+	if ((r = sys_page_alloc(0, addr, PTE_U | PTE_W | PTE_P)) < 0)
+		panic("page allocation error: %e", r);
+	ide_read(blockno * BLKSECTS, addr, BLKSECTS); 
+
+}
+\end{lstlisting}
+
 \subsection{The file system interface}
+既然我们有了文件系统进程的必要功能，我们就要让它能够被其他需要使用文件系统的进程访问。其他进程不能直接调用文件系统进程中的函数，所以我们需要将文件系统进程的访问暴露给RPC(建立在IPC之上)。
 
 \section{Spawning Processes}
+我们已经给出了\lstinline|spawn|的代码，它创建一个子进程，从文件系统装载子进程可执行代码，然后让子进程运行。父进程不依赖于子进程，继续运行下去。\lstinline|spawn|的作用就是UNIX中\lstinline|fork|紧跟着一个\lstinline|exec|。
+
+实现\lstinline|spawn|而不是\lstinline|exec|的目的是\lstinline|spawn|只需要通过User space中的exokernel方式就可以实现，不需要Kernel的特殊功能。如果要在User space空间中实现\lstinline|exec|，我们需要理解为什那么它会更难。
+
+我的理解是，因为User space中的\lstinline|exec|，需要由Kernel去暂时阻塞父进程，并且在子进程结束之后再去重新启用父进程，还要获得子进程的返回值和出错代码。这样的话代码修改量就更多了。
+
 \begin{framed}
 \noindent\textbf{Exercise 3} \lstinline|spawn| relies on the new syscall \lstinline|sys_env_set_trapframe| to initialize the state of the newly created environment. Implement \lstinline|sys_env_set_trapframe|. Test your code by running the \lstinline|user/spawnhello| program from \lstinline|kern/init.c|, which will attempt to spawn \lstinline|/hello| from the file system.
 
 Use \lstinline|make grade| to test your code.
 \end{framed}
 
+这个练习要求我们实现\lstinline|sys_env_set_trapframe|，也很简单，按照注释一步步来就好了。注释还特别提醒了我们要验证用户是否有权限访问Trapframe所在的地址。最后不要忘记在\lstinline|sys_call|中添加分发语句。
+
+\begin{lstlisting}[title=kern/syscall.c]
+static int
+sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
+{
+	// LAB 5: Your code here.
+	// Remember to check whether the user has supplied us with a good
+	// address!
+	struct Env *env;
+	int r;
+	
+	if ((r = envid2env (envid, &env, 1)) < 0) 
+		return -E_BAD_ENV; 
+ 
+	user_mem_assert(env, tf, sizeof(struct Trapframe), PTE_U); 
+ 
+	env->env_tf = *tf; 
+	env->env_tf.tf_cs = GD_UT | 3; 
+	env->env_tf.tf_eflags |= FL_IF; 
+ 	
+ 	return 0; 
+}
+
+int32_t
+syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+{
+	...
+        case SYS_env_set_trapframe:
+        	return sys_env_set_trapframe((envid_t)a1, (struct Trapframe*)a2);
+	...
+}
+\end{lstlisting}
+
 \subsection{Sharing library state across fork and spawn}
+UNIX的文件描述符包含了管道，控制台I/O等很多东西。JOS中，这些设备类型都对应着\lstinline|Dev|结构，这个结构中还有函数指针指向对应的读写操作的实现。\lstinline|lib/fd.c|实现了通用的类UNIX的文件描述符接口。每个\lstinline|Fd|结构表明了它的设备类型。，很多\lstinline|lib/fd.c|的函数只是把操作分发给\lstinline|Dev|结构中的函数。
+
+\lstinline|lib/fd.c|同样维护了每个进程空间中的文件描述表所在的区域，也就是\lstinline|FSTABLE|。这块区域保留了一页的空间留给最多\lstinline|MAXFD|文件描述符。任何时候，一个特定的文件描述符表被映射当且仅当对应的描述符被使用。每个文件描述符同样也有一个在\lstinline|FILEDATA|处的可选的数据页。
+
+我们希望文件描述符的状态需要在\lstinline|fork|和\lstinline|spawn|时被共享，但是文件描述符状态是保存在User space的空间中的。现在对于\lstinline|fork|，这些空间会被标记为COW，所以文件描述符的状态会被拷贝而不是共享，这意味着进程不可能访问不是它们自己打开的文件，管道也不会有任何用处。而对于\lstinline|spawn|，这些空间根本就不会被复制，也就是说子进程不会打开任何文件描述符。
+
+我们需要改变\lstinline|fork|来让它知道有一些内存是被库OS使用所以必须被共享。相比于在某些地方硬编码而言，我们会设置一个页表项中的额外位。
+
+我们在\lstinline|inc/lib.h|中已经定义了\lstinline|PTE_SHARE|。这个位是Intel和AMD手册中标识的软件可用位。我们会约定如果一个页表项设置了这个位，那么这个页表项应该在\lstinline|fork|和\lstinline|spawn|中直接从父进程拷贝到子进程。这与标记为COW不同。
+
 \begin{framed}
 \noindent\textbf{Exercise 4} Change duppage in \lstinline|lib/fork.c| to follow the new convention. If the page table entry has the \lstinline|PTE_SHARE| bit set, just copy the mapping directly. (You should use \lstinline|PTE_SYSCALL|, not \lstinline|0xfff|, to mask out the relevant bits from the page table entry. \lstinline|0xfff| picks up the accessed and dirty bits as well.)
 
 Likewise, implement \lstinline|copy_shared_pages| in \lstinline|lib/spawn.c|. It should loop through all page table entries in the current process (just like fork did), copying any page mappings that have the \lstinline|PTE_SHARE| bit set into the child process.
 \end{framed}
 
+这个练习就是要求上面所说的约定，在\lstinline|duppage|中，需要加入对\lstinline|PTE_SHARE|的判断，代码如下。
+\begin{lstlisting}[title=lib/fork.c]
+static int
+duppage(envid_t envid, unsigned pn)
+{
+	int r;
+	void *addr = (void *)(pn);
+	pte_t pte = uvpt[PGNUM(pn)];
+
+	if (!(pte & PTE_P) || !(pte & PTE_U))
+		return -E_INVAL;
+	if (pte & PTE_SHARE) {
+		if ((r = sys_page_map(0, addr, envid, addr, (pte & PTE_SYSCALL) | PTE_SHARE)) < 0)
+			panic("duppage: sys_page_map: %e", r);
+	} else {
+		if ((pte & PTE_W) || (pte & PTE_COW)) {
+			// Issues in Ruizhe's implementation: missing other PTE bits
+			if ((r = sys_page_map(0, addr, envid, addr, PTE_U | PTE_P | PTE_COW)) < 0)
+				panic("duppage: sys_page_map: %e", r);
+			if ((r = sys_page_map(0, addr, 0, addr, PTE_U | PTE_P | PTE_COW)) < 0)
+				panic("duppage: sys_page_map: %e", r);
+		} else {
+			if ((r = sys_page_map(0, addr, envid, addr, PGOFF(pte))) < 0)
+				panic("duppage: sys_page_map: %e", r);
+		}
+	}
+	return 0;
+}
+\end{lstlisting}
+
+在\lstinline|spawn|中，我们要实现\lstinline|copy_shared_pages|函数，来完成\lstinline|spawn|时的复制。
+
+要注意两点:
+
+1. 需要扫描的范围注释中并没有给出！我们可以看到\lstinline|spawn|函数中对栈进行了更新，所以我们扫描的范围应该是从0到\lstinline|USTACKTOP - PGSIZE|。这一点我调试了很久，如果设置错误，会导致Exercise 4和Exercise 5都不能正常运行。
+
+2. 子进程中的映射需要设置其标志位，我们用\lstinline|uvpt[PGNUM(addr)] & PTE_SYSCALL|来算出父进程中的有效位。
+\begin{lstlisting}[title=lib/spawn.c]
+static int
+copy_shared_pages(envid_t child)
+{
+	uint8_t *addr;
+	int r;
+	for (addr = (uint8_t*)0; addr < (uint8_t*)USTACKTOP - PGSIZE; addr += PGSIZE) {
+		if ((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P))
+			if (uvpt[PGNUM(addr)] & PTE_SHARE)
+				if ((r = sys_page_map(0, addr, child, addr, (uvpt[PGNUM(addr)] & PTE_SYSCALL) | PTE_SHARE)) < 0)
+					panic("copy_shared_pages: sys_page_map: %e", r);
+	}
+	return 0;
+}
+\end{lstlisting}
+
 \section{The keyboard interface}
+我们需要通过打字的方式来操作Shell。QEMU已经可以输出给CGA和串口，但是目前位置我们只能在monitor中输入。QEMU中，在图形窗口中的输入是从键盘来的，在控制台中的输入是从串口来的。\lstinline|kern/console.c|中已经包含了键盘和串口的驱动，现在我们需要把这些附加给整个系统。
+
+控制台输出输出的文件类型也已经在\lstinline|lib/console.c|中实现。
+
 \begin{framed}
 \noindent\textbf{Exercise 5} In your \lstinline|kern/trap.c|, call \lstinline|kbd_intr| to handle trap \lstinline|IRQ_OFFSET+IRQ_KBD| and \lstinline|serial_intr| to handle trap \lstinline|IRQ_OFFSET+IRQ_SERIAL|.
 \end{framed}
 
+这个练习就是要我们添加一下两个Trap的分发，不多说，代码如下。
+\begin{lstlisting}[title=kern/trap.c]
+static void
+trap_dispatch(struct Trapframe *tf)
+{
+	...
+	// Handle keyboard and serial interrupts.
+	// LAB 5: Your code here.
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_KBD) {
+		kbd_intr();
+		return;
+	}
+
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_SERIAL) {
+		serial_intr();
+		return;
+	}
+	...
+}
+\end{lstlisting}
+
+完成了！结果如下：
+\begin{center}
+\includegraphics[scale=0.25]{lab5.grade.png}
+\end{center}
+
 \section{The Shell}
+现在可以使用\lstinline|make run-icode|来启用控制台了。
 \begin{framed}
 \noindent\textbf{Question 2} How long approximately did it take you to do this lab?
 \end{framed}
+
+不算Challenge，大约3个小时。
 
 \begin{framed}
 \noindent\textbf{Question 3} We simplified the file system this year with the goal of making more time for the final project. Do you feel like you gained a basic understanding of the file I/O in JOS? Feel free to suggest things we could improve.
 \end{framed}
 
+好像了解得还不是那么多。尤其是很多细节都没有涉及到。
+
 \section{Challenges}
-
-
-\section{Tips}
-\begin{packed_enum}
-\item Kernel调试信息可以用warn输出，User Mode则要用cprintf
-\end{packed_enum}
 
 \section{References}
 北京大学操作系统实习(实验班)报告，黄睿哲。
+
 操作系统JOS实习第一次报告，张弛。
 \end{document}
