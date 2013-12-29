@@ -292,6 +292,14 @@ trap_dispatch(struct Trapframe *tf)
 好像了解得还不是那么多。尤其是很多细节都没有涉及到。
 
 \section{Challenges}
+\begin{framed}
+\noindent\textbf{Challenge} Implement Unix-style exec.
+\end{framed}
+
+我没有具体的实现，只是讲一讲大概的思路：
+
+实际上\lstinline|exec|也就是创建一个进程，然后阻塞父进程，执行完子进程后在恢复父进程。那么具体代码基本可以参考\lstinline|spawn|的实现。
+但是Kernel需要提供系统调用，来阻塞恢复一个进程。阻塞时需要把进程状态设为\lstinline|NOT_RUNNABLE|，恢复时重新设为\lstinline|RUNNABLE|。或者可以增加一个自己设定的状态\lstinline|BLOCKED|来实现。最后还需要设置子进程的返回值，也就是设置\lstinline|env_tf.tf_regs.reg_eax = 0|。
 
 \section{References}
 北京大学操作系统实习(实验班)报告，黄睿哲。
